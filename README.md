@@ -1,34 +1,30 @@
 # csl++
 
-csl++ is an open-source frontend for the Cerebras Software Language (CSL),
-developed by the Embedded Systems and Applications Group at the Technical
-University of Darmstadt. It adds async functions and tasks and automatic
-allocation of colors, task IDs and queues to CSL. Its compiler, `csl-pp`,
-evaluates the program at compile time, transforms it in its own IR, and
-lowers it to vanilla CSL, which `cslc` of the Cerebras SDK compiles. `csl-pp`
-accepts the command-line arguments of `cslc`. Contributions are welcome.
+csl++ is a place to develop new language features for the Cerebras Software Language (CSL) and to test them at wafer scale. It extends CSL, so every CSL program is also a csl++ program. It currently adds async functions and tasks, and automatic allocation of colors, task IDs and queues.
+
+The csl++ compiler `csl-pp` is a drop-in replacement for `cslc` and takes the same command-line arguments. It translates a program to vanilla CSL and then compiles the result with `cslc`, the compiler of the Cerebras SDK.
+
+csl++ is developed by the Embedded Systems and Applications Group at the Technical University of Darmstadt. Contributions are welcome.
 
 ```csl
-async task sum_task() void {
-  if (layout_mod.get_x_coord() > 0) {
-    // Add the partial sum arriving from the west.
-    @fadds(x_dsd, x_dsd, in_dsd, .{ .async = true, .activate = @current_task() });
-    suspend;
-  }
-  if (layout_mod.get_x_coord() < @as(u16, width - 1)) {
-    // Send the partial sum east.
-    @fmovs(out_dsd, x_dsd, .{ .async = true, .activate = @current_task() });
-    suspend;
-  }
-  sys_mod.unblock_cmd_stream();
+async fn recv_squared(comptime in: fabin_dsd) f32 {
+  var x: f32 = 0.0;
+  @fmovs(&x, in, .{ .async = true, .activate = @current_task() });
+  suspend;  // continues here when the value has arrived
+  x *= x;
+  return x;
+}
+
+async task main() void {
+  // Receive from both neighbors at the same time.
+  const r = @await_parallel(recv_squared(west_dsd), recv_squared(east_dsd));
+  sum = r[0] + r[1];
 }
 ```
 
 ## Documentation
 
-The documentation at https://esa-tu-darmstadt.github.io/csl-pp/ contains
-installation instructions, a quickstart, a tutorial, and the reference of the
-language extensions. Its source is in `website/`.
+The documentation at https://esa-tu-darmstadt.github.io/csl-pp/ contains installation instructions, a quickstart, a tutorial, and the reference of the language extensions. Its source is in `website/`.
 
 ## Installation
 
@@ -36,9 +32,7 @@ language extensions. Its source is in `website/`.
 pipx install csl-pp
 ```
 
-The package contains `csl-pp`, `csl-lsp-server` and the libraries for x86-64
-Linux with glibc 2.28 or newer. `csl-pp` runs `cslc` of the Cerebras SDK,
-which is installed separately; put the SDK directory on your `PATH`.
+The package contains `csl-pp`, `csl-lsp-server` and the libraries for x86-64 Linux with glibc 2.28 or newer. `csl-pp` runs `cslc` of the Cerebras SDK, which is installed separately; put the SDK directory on your `PATH`.
 
 ## Building
 
@@ -52,8 +46,7 @@ python3 scripts/conan-build.py install --build=missing -pr:a default -s:a compil
 python3 scripts/conan-build.py build -pr:a default -s:a compiler.cppstd=20
 ```
 
-The tools are in `build/Release/bin`. `docs/Building.md` describes the build
-in detail.
+The tools are in `build/Release/bin`. `docs/Building.md` describes the build in detail.
 
 ## Repository
 
@@ -71,6 +64,4 @@ in detail.
 
 ## License
 
-csl++ is under the Apache License v2.0 with LLVM Exceptions; see
-`LICENSE.TXT`. `NOTICE` lists the parts derived from the examples of the
-Cerebras SDK.
+csl++ is under the Apache License v2.0 with LLVM Exceptions; see `LICENSE.TXT`. `NOTICE` lists the parts derived from the examples of the Cerebras SDK.

@@ -20,11 +20,9 @@ Before using the extension, set **`csl.systemModuleSif`** to point to the `.sif`
 
 ## Why this language server exists
 
-The language server uses the frontend of `csl-pp`, the compiler of csl++, which is developed in a research project at TU Darmstadt.
-`csl-pp` performs whole-program transformations, such as the lowering of async functions.
+The language server uses the frontend of `csl-pp`, the compiler of csl++, which is developed in a research project at TU Darmstadt. `csl-pp` performs whole-program transformations, such as the lowering of async functions.
 
-Those transformations depend on accurate static types for the full program.  
-In CSL (similar to Zig), types are first-class values, and thus infering static type information requires comptime evaluation of the complete program.
+Those transformations depend on accurate static types for the full program. In CSL (similar to Zig), types are first-class values, and thus infering static type information requires comptime evaluation of the complete program.
 
 For that reason, comptime-related analysis in this extension is intended to model CSL semantics fully, not as a best-effort approximation for editor tooling.
 
