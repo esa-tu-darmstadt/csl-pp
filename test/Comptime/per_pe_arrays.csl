@@ -1,0 +1,163 @@
+// RUN: csl-s2s %s --rectangle=3,2 --fabric-offsets=1,2 --verify-diagnostics --split-input-file
+
+// =============================================================================
+// Per-PE dimension via 2D array of sizes
+// =============================================================================
+
+comptime {
+  var sizes = @zeros([3, 2]u16);
+  sizes[0, 0] = 10; sizes[1, 0] = 20; sizes[2, 0] = 30;
+  sizes[0, 1] = 40; sizes[1, 1] = 50; sizes[2, 1] = 60;
+  // Internal layout matches [W, H] array: x*H+y order
+  // expected-remark @+1 {{[per_pe(10, 40, 20, 50, 30, 60)]i32}}
+  @comptime_print([sizes]i32);
+}
+
+// -----
+
+// =============================================================================
+// Mixed static + per-PE dimensions
+// =============================================================================
+
+comptime {
+  var sizes = @zeros([3, 2]u16);
+  sizes[0, 0] = 100; sizes[1, 0] = 200; sizes[2, 0] = 300;
+  sizes[0, 1] = 400; sizes[1, 1] = 500; sizes[2, 1] = 600;
+  // expected-remark @+1 {{[42, per_pe(100, 400, 200, 500, 300, 600)]i32}}
+  @comptime_print([42, sizes]i32);
+}
+
+// -----
+
+// =============================================================================
+// Per-PE dimension via function
+// =============================================================================
+
+fn get_size(x: u16, y: u16) u16 {
+  return x + y + 1;
+}
+
+comptime {
+  // x-major: (0,0)=1, (0,1)=2, (1,0)=2, (1,1)=3, (2,0)=3, (2,1)=4
+  // expected-remark @+1 {{[per_pe(1, 2, 2, 3, 3, 4)]u16}}
+  @comptime_print([get_size]u16);
+}
+
+// -----
+
+// =============================================================================
+// All-static dimensions still produce regular ArrayType
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{[5, 10]f32}}
+  @comptime_print([5, 10]f32);
+}
+
+// -----
+
+// =============================================================================
+// Per-PE with zero values (allowed for sparse workloads)
+// =============================================================================
+
+comptime {
+  var sizes = @zeros([3, 2]u16);
+  sizes[1, 0] = 5;
+  sizes[0, 1] = 3;
+  sizes[2, 1] = 7;
+  // x-major: (0,0)=0, (0,1)=3, (1,0)=5, (1,1)=0, (2,0)=0, (2,1)=7
+  // expected-remark @+1 {{[per_pe(0, 3, 5, 0, 0, 7)]u16}}
+  @comptime_print([sizes]u16);
+}
+
+// -----
+
+// =============================================================================
+// Smaller-than-grid array (PEs outside data bounds get size 0)
+// =============================================================================
+
+comptime {
+  // Rectangle is 3x2, but array is only 2x1
+  var sizes = @zeros([2, 1]u16);
+  sizes[0, 0] = 10;
+  sizes[1, 0] = 20;
+  // data_width=2, data_height=1: values stored for (0,0)=10, (1,0)=20
+  // PEs at y>=1 or x>=2 implicitly get 0
+  // expected-remark @+1 {{[per_pe(10, 20)]i32}}
+  @comptime_print([sizes]i32);
+}
+
+// -----
+
+// =============================================================================
+// Different-sized per-PE arrays (expanded to max extent with zeros)
+// =============================================================================
+
+comptime {
+  // First dim: 2x1 array
+  var dim0 = @zeros([2, 1]u16);
+  dim0[0, 0] = 10;
+  dim0[1, 0] = 20;
+  // Second dim: 3x2 array (full grid)
+  var dim1 = @zeros([3, 2]u16);
+  dim1[0, 0] = 1; dim1[1, 0] = 2; dim1[2, 0] = 3;
+  dim1[0, 1] = 4; dim1[1, 1] = 5; dim1[2, 1] = 6;
+  // max extent: 3x2. dim0 is expanded from 2x1 → 3x2 with zeros.
+  // dim0 expanded x-major: (0,0)=10, (0,1)=0, (1,0)=20, (1,1)=0, (2,0)=0, (2,1)=0
+  // dim1 x-major: (0,0)=1, (0,1)=4, (1,0)=2, (1,1)=5, (2,0)=3, (2,1)=6
+  // expected-remark @+1 {{[per_pe(10, 0, 20, 0, 0, 0), per_pe(1, 4, 2, 5, 3, 6)]i32}}
+  @comptime_print([dim0, dim1]i32);
+}
+
+// -----
+
+// =============================================================================
+// Mixed array + function per-PE dims (expanded to max extent)
+// =============================================================================
+
+fn get_size2(x: u16, y: u16) u16 {
+  return x * 10 + y;
+}
+
+comptime {
+  // Array dim: 2x1 (smaller than grid 3x2)
+  var arr = @zeros([2, 1]u16);
+  arr[0, 0] = 7;
+  arr[1, 0] = 8;
+  // Function dim: covers full grid 3x2
+  // max extent: 3x2. Array expanded from 2x1 → 3x2 with zeros.
+  // arr expanded x-major: (0,0)=7, (0,1)=0, (1,0)=8, (1,1)=0, (2,0)=0, (2,1)=0
+  // func x-major: (0,0)=0, (0,1)=1, (1,0)=10, (1,1)=11, (2,0)=20, (2,1)=21
+  // expected-remark @+1 {{[per_pe(7, 0, 8, 0, 0, 0), per_pe(0, 1, 10, 11, 20, 21)]i32}}
+  @comptime_print([arr, get_size2]i32);
+}
+
+// -----
+
+// =============================================================================
+// Error: function with wrong signature
+// =============================================================================
+
+fn bad_sig(x: u16) u16 {
+  return x;
+}
+
+comptime {
+  // expected-error @+1 {{per-PE dimension function must take (u16, u16)}}
+  @comptime_print([bad_sig]u16);
+}
+
+// -----
+
+// =============================================================================
+// Error: function returning non-integer
+// =============================================================================
+
+fn bad_ret(x: u16, y: u16) f32 {
+  return 1.0;
+}
+
+comptime {
+  // expected-error @+1 {{per-PE dimension function must return an integer type}}
+  @comptime_print([bad_ret]u16);
+}

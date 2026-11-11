@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: runs clang-format on staged C/C++ files.
+# Only formats the staged hunks (not the whole file), so unstaged
+# changes are left untouched. Reformatted files are re-staged
+# automatically.
+#
+
+if ! command -v clang-format &>/dev/null; then
+  echo "warning: clang-format not found, skipping formatting hook"
+  exit 0
+fi
+
+# Collect staged C/C++ files (exclude deleted files and the llvm submodule).
+staged_files=()
+while IFS= read -r -d '' file; do
+  staged_files+=("$file")
+done < <(git diff --cached --name-only --diff-filter=d -z -- \
+  '*.cpp' '*.h' '*.c' '*.hpp' '*.def' \
+  ':!llvm' ':!llvm/**' ':!build/**')
+
+if [ ${#staged_files[@]} -eq 0 ]; then
+  exit 0
+fi
+
+# Format each file and re-stage it.
+for file in "${staged_files[@]}"; do
+  clang-format -i "$file"
+  git add "$file"
+done

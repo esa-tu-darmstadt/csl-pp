@@ -1,0 +1,11 @@
+// RUN: csl-s2s %s                    | FileCheck %s --check-prefix=F16
+// RUN: csl-s2s %s --fp16-format=f16  | FileCheck %s --check-prefix=F16
+// RUN: csl-s2s %s --fp16-format=bf16 | FileCheck %s --check-prefix=BF16
+// RUN: csl-s2s %s --fp16-format=cb16 | FileCheck %s --check-prefix=CB16
+
+// F16:  fn square({{.*}}: f16) f16 {
+// BF16: fn square({{.*}}: bf16) bf16 {
+// CB16: fn square({{.*}}: cb16) cb16 {
+export fn square(x: @fp16()) @fp16() {
+    return x * x;
+}

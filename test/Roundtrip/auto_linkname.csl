@@ -1,0 +1,51 @@
+// RUN: csl-s2s %s --auto-linkname --split-input-file | FileCheck %s
+
+// =============================================================================
+// Auto-linkname: private module functions and globals get dot-separated names.
+// User-specified linkname takes priority over auto-linkname.
+// =============================================================================
+
+const ln_mod = @import_module("Modules/linkname_module.csl.module");
+
+// Private symbols get auto-linkname with dot separator
+// CHECK: var ln_mod__my_var: i32 linkname("ln_mod.my_var") = @as(i32, 0);
+// CHECK: fn ln_mod__internal_impl(param0: i32) linkname("ln_mod.internal_impl") i32 {
+
+// Linkname stays as attribute, symbol still gets prefixed
+// CHECK: fn ln_mod__custom_named_func(param0: i32) linkname("my_custom_link_name") i32 {
+
+export fn test_auto_linkname() i32 {
+    return ln_mod.custom_named_func(42);
+}
+
+// -----
+
+// =============================================================================
+// Auto-linkname: export functions do NOT get auto-linkname
+// =============================================================================
+
+const mod = @import_module("Modules/export_module.csl.module");
+
+// Private helper gets auto-linkname, export gets prefixed and keeps linkname
+// CHECK: fn mod__private_helper(param0: i32) linkname("mod.private_helper") i32 {
+// CHECK: export fn mod__exported_func(param0: i32) linkname("exported_func") i32 {
+
+export fn test_export_no_auto_linkname() i32 {
+    return mod.exported_func(5);
+}
+
+// -----
+
+// =============================================================================
+// Auto-linkname: extern functions do NOT get auto-linkname
+// =============================================================================
+
+const ext_mod = @import_module("Modules/extern_module.csl.module");
+
+// Extern gets prefixed and keeps linkname, private gets auto-linkname
+// CHECK: extern fn ext_mod__external_runtime_func(param0: i32) linkname("external_runtime_func") i32;
+// CHECK: fn ext_mod__use_external(param0: i32) linkname("ext_mod.use_external") i32 {
+
+export fn test_extern_no_auto_linkname() i32 {
+    return ext_mod.use_external(10);
+}

@@ -1,0 +1,73 @@
+---
+title: Stacks
+description: How async tasks get their stacks, and the modifiers max_recursion_depth(N) and stack_size(N).
+---
+
+import Example from '../../../components/Example.astro';
+
+Every async task runs on a stack of its own, which `csl-pp` allocates as a global array. No memory is allocated at runtime. `csl-pp` computes the size of each stack from the stack frames of the functions the task calls:
+
+- An ordinary call and a call with `@await` add the stack use of the callee to the caller's.
+- `@await_parallel` adds the stack use of all its calls, because they can be suspended at the same time. Each call except the first also needs 12 bytes for its arguments.
+- Calls in sequence reuse the same memory.
+
+The frame sizes are decided by `cslc`. `csl-pp` therefore compiles a program with async tasks twice: the first `cslc` run reports the frame size of every function, and the second compiles the program with stacks of the computed sizes. See [Using csl-pp](../../tools/csl-pp/#stack-sizes).
+
+This computation needs a bounded stack use for every function that an async task can reach. Recursion and `extern` functions need an annotation.
+
+## `max_recursion_depth(N)`
+
+```csl
+fn name(parameters) max_recursion_depth(N) ReturnType { ... }
+```
+
+A recursion that an async task can reach must be bounded. Annotate one function of each recursion cycle with `max_recursion_depth(N)`, where `N` is the maximum number of calls of that function that are active at the same time, counting the outermost one:
+
+<Example file="language/stacks/src/pe.csl" region="recursion" />
+
+- `N` is an integer literal of at least 1.
+- One annotated function per cycle is enough. If several functions of a cycle are annotated, their bounds are added.
+- `csl-pp` warns if the function is not recursive.
+
+## Tail calls
+
+A call of a function to itself that is the last action of the function, `return f(...)` or `f(...); return;` in a `void` function, is compiled into a loop. It needs no annotation:
+
+<Example file="language/stacks/src/pe.csl" region="tail-call" />
+
+This does not apply to async functions and tasks, to functions that take an address with `&`, and to tail calls inside a loop of the function. `max_recursion_depth(N)` on a function whose recursion becomes a loop has no effect, and `csl-pp` warns about it.
+
+## `stack_size(N)`
+
+```csl
+fn name(parameters) stack_size(N) ReturnType { ... }
+async fn name(parameters) stack_size(N) ReturnType { ... }
+async task name() stack_size(N) void { ... }
+extern fn name(parameters) stack_size(N) ReturnType;
+```
+
+`stack_size(N)` declares that the function, including everything it calls, uses at most `N` bytes of stack. `csl-pp` uses `N` and does not look into the function.
+
+<Example file="language/stacks/src/pe.csl" region="stack-size" />
+
+- An `extern` function that an async task can reach must have `stack_size(N)`, because its body is not visible to `csl-pp`.
+- `stack_size(N)` also bounds a recursion.
+- After compiling, `csl-pp` checks `N` against the frames it can see and reports an error if `N` is too small.
+- If a function has both modifiers, `max_recursion_depth(N)` is ignored, with a warning.
+- When every async task and every async function called with `@await_parallel` has `stack_size(N)`, `csl-pp` runs `cslc` only once.
+
+Both modifiers are written between the parameter list and the return type, in any order.
+
+## Function pointers
+
+An indirect call needs no annotation. A function pointer can only point to a function whose address is taken somewhere in the program and whose type equals the pointer's type, so `csl-pp` uses the largest stack use among these functions. If no such function exists, `csl-pp` warns about the call.
+
+## Errors
+
+| Message | Cause |
+| --- | --- |
+| `recursive calls a -> b -> a are reachable from an async task, so the task's stack size cannot be computed` | A recursion without `max_recursion_depth(N)` or `stack_size(N)`. |
+| `recursive calls ... run through @await_parallel` | A recursion through a call of an `@await_parallel` with several calls. |
+| `extern function 'f' is reachable from an async task but has no stack_size(N)` | See above. |
+| `stack_size(N) on function 'f' is provably too small` | `N` is less than the stack use `csl-pp` can see. |
+| `max_recursion_depth must be at least 1` | `max_recursion_depth(0)`. |

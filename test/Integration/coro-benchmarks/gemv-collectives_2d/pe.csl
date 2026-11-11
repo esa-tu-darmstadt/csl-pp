@@ -1,0 +1,145 @@
+// y = Ax + b kernel (coroutine version).
+
+param memcpy_params;
+param c2d_params;
+
+param Mt: u16; // Height of local matrix, or num rows per PE
+param Nt: u16; // Width of local matrix, or num cols per PE
+
+const STATE: local_task_id = @claim_local_task();
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const timestamp = @import_module("<time>");
+
+const mpi_x = @import_module("../csl-libs/collectives_2d/pe.csl", .{ .dim_params = c2d_params.x });
+const mpi_y = @import_module("../csl-libs/collectives_2d/pe.csl", .{ .dim_params = c2d_params.y });
+
+const Pw = @get_rectangle().width;  // Num cols of PEs in kernel
+const Ph = @get_rectangle().height; // Num rows of PEs in kernel
+
+// Only PE (0,0) is initialized with a full copy of `x` / `b`.
+var x_src = @zeros([Nt * Pw]f32);
+var ptr_x : [*]f32 = &x_src;
+
+var b_src = @zeros([Mt * Ph]f32);
+var ptr_b : [*]f32 = &b_src;
+
+// Each PE has its own tile of `A`.
+var A_tile = @zeros([Mt*Nt]f32);
+const dsd_A_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Mt} -> A_tile[i*@as(i16, Nt)] });
+var ptr_A : [*]f32 = &A_tile;
+
+var x_tile = @zeros([Nt]f32);
+const dsd_x_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Nt} -> x_tile[i]});
+
+var b_tile = @zeros([Mt]f32);
+const dsd_b_tile = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Mt} -> b_tile[i]});
+
+var local_prod = @zeros([Mt]f32);
+const dsd_local_prod = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{Mt} -> local_prod[i]});
+
+var row_sum = @zeros([Mt]f32);
+
+// Final result is stored on PE (Pw-1, Ph-1).
+var final_result = @zeros([Mt * Ph]f32);
+var ptr_y : [*]f32 = &final_result;
+
+var px: u16;
+var py: u16;
+
+// Cycle-count timing buffers.
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscEndBuffer   = @zeros([timestamp.tsc_size_words]u16);
+var time_buf_u16   = @zeros([timestamp.tsc_size_words*2]u16);
+var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
+
+fn f_init() void {
+    @coro_runtime_init();
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_enable_timer() void {
+    timestamp.enable_tsc();
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic() void {
+    timestamp.get_timestamp(&tscStartBuffer);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc() void {
+    timestamp.get_timestamp(&tscEndBuffer);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_memcpy_timestamps() void {
+    time_buf_u16[0] = tscStartBuffer[0];
+    time_buf_u16[1] = tscStartBuffer[1];
+    time_buf_u16[2] = tscStartBuffer[2];
+    time_buf_u16[3] = tscEndBuffer[0];
+    time_buf_u16[4] = tscEndBuffer[1];
+    time_buf_u16[5] = tscEndBuffer[2];
+    sys_mod.unblock_cmd_stream();
+}
+
+fn main() void {
+    @activate(STATE);
+}
+
+async task f_state() void {
+    timestamp.get_timestamp(&tscStartBuffer);
+    mpi_x.init();
+    mpi_y.init();
+    px = mpi_x.pe_id;
+    py = mpi_y.pe_id;
+
+    // Step 1: scatter `b` down column 0.
+    if (px == 0) {
+        @await(mpi_y.scatter(0, @ptrcast([*]u32, &b_src), @ptrcast([*]u32, &b_tile), Mt));
+    }
+
+    // Step 2: scatter `x` across row 0.
+    if (py == 0) {
+        @await(mpi_x.scatter(0, @ptrcast([*]u32, &x_src), @ptrcast([*]u32, &x_tile), Nt));
+    }
+
+    // Step 3: broadcast tiles of `x` down each column.
+    @await(mpi_y.broadcast(0, @ptrcast([*]u32, &x_tile), Nt));
+
+    // Step 4: local A_tile * x_tile (+ b_tile on the leftmost column).
+    for (@range(i16, Nt)) |j| {
+        const dsd_A_offset = @increment_dsd_offset(dsd_A_tile, j, f32);
+        @fmacs(dsd_local_prod, dsd_local_prod, dsd_A_offset, x_tile[j]);
+    }
+    if (px == 0) {
+        @fadds(dsd_local_prod, dsd_local_prod, dsd_b_tile);
+    }
+
+    // Step 5: reduce row-wise into the right-most column.
+    @await(mpi_x.reduce_fadds(Pw - 1, @ptrcast([*]f32, &local_prod),
+                                    @ptrcast([*]f32, &row_sum), Mt));
+
+    // Step 6: gather the right column into the bottom-right PE.
+    @await(mpi_y.gather(Ph - 1, @ptrcast([*]u32, &row_sum),
+                              @ptrcast([*]u32, &final_result), Mt));
+
+    timestamp.get_timestamp(&tscEndBuffer);
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @bind_local_task(f_state, STATE);
+
+    @export_symbol(ptr_A, "A");
+    @export_symbol(ptr_x, "x");
+    @export_symbol(ptr_b, "b");
+    @export_symbol(ptr_y, "y");
+    @export_symbol(ptr_time_buf_u16, "time_buf_u16");
+    @export_symbol(f_init);
+    @export_symbol(f_enable_timer);
+    @export_symbol(f_tic);
+    @export_symbol(f_toc);
+    @export_symbol(f_memcpy_timestamps);
+    @export_symbol(main);
+}

@@ -1,0 +1,5 @@
+# Tools of the release build: build-wheel.py needs packaging; twine and
+# auditwheel check the wheel.
+packaging==26.3
+twine==7.0.0
+auditwheel==6.8.2

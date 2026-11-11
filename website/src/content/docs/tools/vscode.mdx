@@ -1,0 +1,49 @@
+---
+title: VS Code extension
+description: Setting up the csl++ language server in VS Code.
+---
+
+`csl-lsp-server` is a language server for CSL and csl++. It uses the same front end as `csl-pp`, including comptime evaluation of the whole program. It reports the errors that `csl-pp` finds while parsing, evaluating and type-checking, and knows the types of values that depend on comptime code.
+
+The VS Code extension [CSL Language Server](https://marketplace.visualstudio.com/items?itemName=esa-tu-darmstadt.csl-lsp) provides:
+
+- diagnostics while you type;
+- the type of a value on hover;
+- go to definition, including into imported modules;
+- completion, including members after `.`;
+- signature help for calls;
+- the outline of a file.
+
+## Install
+
+Install the extension from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=esa-tu-darmstadt.csl-lsp), or from the command line:
+
+```bash
+code --install-extension esa-tu-darmstadt.csl-lsp
+```
+
+The extension bundles `csl-lsp-server`; nothing needs to be built. To run a server built from the repository instead, for example while working on the language server itself, set `csl.serverPath` to its path. The source of the extension is in `editors/vscode`.
+
+## Settings
+
+Set `csl.systemModuleSif` to the SDK image, so that imports such as `<memcpy/memcpy>` can be resolved:
+
+```json
+{
+  "csl.systemModuleSif": "/home/user/cerebras-sdk/sdk-cbcore-2.10.0.sif",
+  "csl.arch": "wse3",
+  "csl.params": { "width": 4, "N": 8 }
+}
+```
+
+| Setting | Meaning | Default |
+| --- | --- | --- |
+| `csl.systemModuleSif` | The SDK image (`*.sif`) to read system modules from. | none |
+| `csl.systemImportPath` | A directory with the system modules, instead of the image; with an image, the directory in the image. | none |
+| `csl.arch` | `wse2` or `wse3`. | `wse2` |
+| `csl.params` | Values of `param` declarations, like `--params`. | `{}` |
+| `csl.fabricDims`, `csl.fabricOffsets`, `csl.rectangle` | Values for `@get_rectangle` and related builtins, as `width,height` and `x,y`. | `100,100`, `3,3`, `100,100` |
+| `csl.serverPath` | A `csl-lsp-server` other than the bundled one. | bundled |
+| `csl.serverArgs` | Further arguments of the server. | `[]` |
+
+`CSL: Restart Language Server` in the command palette restarts the server after a change of settings.

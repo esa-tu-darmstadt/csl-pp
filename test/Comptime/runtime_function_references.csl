@@ -1,0 +1,158 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// A function that is only referenced, not called, must be instantiated once
+// the reference reaches the runtime program. Functions referenced only by
+// comptime code must not be instantiated.
+
+// =============================================================================
+// Coercion to a function pointer in a runtime variable and an assignment
+// =============================================================================
+
+// CHECK-LABEL: fn assigned_first(
+fn assigned_first(x: i32) i32 {
+  return x * 2;
+}
+
+// CHECK-LABEL: fn assigned_second(
+fn assigned_second(x: i32) i32 {
+  return x * 3;
+}
+
+// CHECK-LABEL: export fn select_function(
+// CHECK:     var fp: *const fn(i32) i32 = &assigned_first;
+// CHECK:         fp = &assigned_second;
+export fn select_function(use_first: bool) i32 {
+  var fp: *const fn(i32) i32 = assigned_first;
+  if (!use_first) {
+    fp = assigned_second;
+  }
+  return fp(5);
+}
+
+// -----
+
+// =============================================================================
+// Function reference passed as a runtime call argument
+// =============================================================================
+
+fn apply(func: *const fn(i32) i32, x: i32) i32 {
+  return func(x);
+}
+
+// CHECK-LABEL: fn passed_argument(
+fn passed_argument(x: i32) i32 {
+  return x + 1;
+}
+
+// CHECK-LABEL: export fn pass_function(
+// CHECK:     return apply(&passed_argument, @as(i32, 10));
+export fn pass_function() i32 {
+  return apply(passed_argument, 10);
+}
+
+// -----
+
+// =============================================================================
+// Function pointer in the initializer of a runtime global
+// =============================================================================
+
+// CHECK-LABEL: fn global_target(
+fn global_target() void {}
+
+// CHECK: var global_pointer: *const fn() void = &global_target;
+var global_pointer: *const fn() void = global_target;
+
+export fn call_global_pointer() void {
+  global_pointer();
+}
+
+// -----
+
+// =============================================================================
+// Function references nested in the initializer of a global. The unused fifo
+// and its tasks are removed after lowering; without instantiation, the
+// verifier rejects the dangling references before that.
+// =============================================================================
+
+task nested_push_task() void {}
+task nested_pop_task() void {}
+
+var fifo_buffer: [64]i16;
+const fifo = @allocate_fifo(fifo_buffer, .{
+    .activate_push = nested_push_task,
+    .activate_pop = nested_pop_task
+});
+
+comptime {
+  // expected-remark @+1 {{fifo_handle}}
+  @comptime_print(@type_of(fifo));
+}
+
+// -----
+
+// =============================================================================
+// Function pointer tables indexed at runtime
+// =============================================================================
+
+// CHECK-LABEL: fn table_first(
+fn table_first() void {}
+// CHECK-LABEL: fn table_second(
+fn table_second() void {}
+// CHECK-LABEL: fn table_third(
+fn table_third() void {}
+
+// CHECK: const address_table: [2](*const fn() void) = [2](*const fn() void){&table_first, &table_second};
+const address_table = [2]*const fn() void { &table_first, &table_second };
+// CHECK: var coerced_table: [2](*const fn() void) = [2](*const fn() void){&table_first, &table_third};
+var coerced_table = [2]*const fn() void { table_first, table_third };
+var table_index: u16 = 1;
+
+// CHECK-LABEL: export fn call_tables(
+// CHECK:     (address_table)[table_index]();
+// CHECK:     (coerced_table)[table_index]();
+export fn call_tables() void {
+  address_table[table_index]();
+  coerced_table[table_index]();
+}
+
+// -----
+
+// =============================================================================
+// A function instantiated through a reference references another function
+// =============================================================================
+
+// CHECK-LABEL: fn transitive_leaf(
+fn transitive_leaf() void {}
+
+// CHECK-LABEL: fn transitive_middle(
+// CHECK:     var fp: *const fn() void = &transitive_leaf;
+fn transitive_middle() void {
+  var fp: *const fn() void = transitive_leaf;
+  fp();
+}
+
+export fn transitive_root() void {
+  var fp: *const fn() void = transitive_middle;
+  fp();
+}
+
+// -----
+
+// =============================================================================
+// References only used by comptime code
+// =============================================================================
+
+// CHECK-NOT: fn comptime_address_target
+fn comptime_address_target() void {}
+
+comptime {
+  const p = &comptime_address_target;
+}
+
+// CHECK-NOT: fn unused_alias_target
+fn unused_alias_target() void {}
+
+// CHECK-LABEL: export fn unused_alias(
+export fn unused_alias() void {
+  const alias = unused_alias_target;
+}

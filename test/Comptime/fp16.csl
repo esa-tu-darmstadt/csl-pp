@@ -1,0 +1,80 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Comptime-known values of f16, cb16, and bf16 should have the expected bit patterns
+// =============================================================================
+
+const ieee_six: f16 = 6.0;
+const cb_six: cb16 = 6.0;
+const bf_six: bf16 = 6.0;
+
+comptime {
+    @comptime_assert(@bitcast(u16, ieee_six) == 0b0100011000000000);
+    @comptime_assert(@bitcast(u16, cb_six)   == 0b0101100100000000);
+    @comptime_assert(@bitcast(u16, bf_six)   == 0b0100000011000000);
+}
+
+// -----
+
+// =============================================================================
+// CB16 bitcast roundtrips (verified against official compiler)
+// =============================================================================
+
+comptime {
+    // cb16 1.0: stored exp = 42 (bias 42 → real exp 0), mantissa = 0 → 0b0101010_000000000 = 21504
+    @comptime_assert(@bitcast(u16, @as(cb16, 1.0)) == 21504);
+
+    // cb16 2^20 (max normal exponent): stored exp = 62, mantissa = 0 → 0b0111110_000000000 = 31744
+    @comptime_assert(@bitcast(u16, @as(cb16, 1048576.0)) == 31744);
+
+    // cb16 negative zero: sign=1, exp=0, mantissa=0 → 0b1_000000_000000000 = 32768
+    @comptime_assert(@bitcast(u16, -@as(cb16, 0.0)) == 32768);
+}
+
+// -----
+
+// =============================================================================
+// CB16 comptime arithmetic
+// =============================================================================
+
+comptime {
+    @comptime_assert(@as(cb16, 3.0) + @as(cb16, 3.0) == @as(cb16, 6.0));
+    @comptime_assert(@as(cb16, 6.0) * @as(cb16, 2.0) == @as(cb16, 12.0));
+}
+
+// -----
+
+// =============================================================================
+// CB16 comptime float coercion
+// =============================================================================
+
+const x: cb16 = 42.0;
+
+comptime {
+    // expected-remark @+1 {{cb16}}
+    @comptime_print(@type_of(x));
+}
+
+// -----
+
+// =============================================================================
+// CB16 type_of
+// =============================================================================
+
+comptime {
+    // expected-remark @+1 {{cb16}}
+    @comptime_print(@type_of(@as(cb16, 1.0)));
+}
+
+// -----
+
+// =============================================================================
+// CB16 <-> u16 bitcast roundtrip
+// =============================================================================
+
+comptime {
+    const val = @bitcast(cb16, @as(u16, 21504));
+    // expected-remark @+1 {{1}}
+    @comptime_print(val);
+    @comptime_assert(@bitcast(u16, val) == 21504);
+}

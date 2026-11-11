@@ -1,0 +1,302 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic enum definition and element access
+// =============================================================================
+
+const colors = enum(u16) {
+    red,
+    green,
+    blue,
+};
+
+comptime {
+    const c = colors.red;
+    // expected-remark @+1 {{.red}}
+    @comptime_print(c);
+    // expected-remark @+1 {{.green}}
+    @comptime_print(colors.green);
+    // expected-remark @+1 {{.blue}}
+    @comptime_print(colors.blue);
+}
+
+// -----
+
+// =============================================================================
+// Enum with explicit values
+// =============================================================================
+
+const priority = enum(u8) {
+    low,
+    medium = 50,
+    high = 100,
+};
+
+comptime {
+    // expected-remark @+1 {{.low}}
+    @comptime_print(priority.low);
+    // expected-remark @+1 {{.medium}}
+    @comptime_print(priority.medium);
+    // expected-remark @+1 {{.high}}
+    @comptime_print(priority.high);
+}
+
+// -----
+
+// =============================================================================
+// Auto-incrementing values (previous + 1)
+// =============================================================================
+
+const sparse = enum(u16) {
+    first = 10,
+    second,      // 11
+    third = 100,
+    fourth,      // 101
+};
+
+comptime {
+    // expected-remark @+1 {{11}}
+    @comptime_print(@get_int(sparse.second));
+    // expected-remark @+1 {{101}}
+    @comptime_print(@get_int(sparse.fourth));
+}
+
+// -----
+
+// =============================================================================
+// Enum equality comparison
+// =============================================================================
+
+const mode = enum(u32) {
+    read,
+    write,
+    append,
+};
+
+comptime {
+    const m = mode.write;
+    // expected-remark @+1 {{true}}
+    @comptime_print(m == mode.write);
+    // expected-remark @+1 {{false}}
+    @comptime_print(m == mode.read);
+    // expected-remark @+1 {{true}}
+    @comptime_print(m != mode.append);
+    // expected-remark @+1 {{false}}
+    @comptime_print(m != mode.write);
+}
+
+// -----
+
+// =============================================================================
+// @get_int builtin for enums
+// =============================================================================
+
+const status = enum(i16) {
+    ok,
+    warning = 10,
+    failed = 20,
+};
+
+comptime {
+    // expected-remark @+1 {{0}}
+    @comptime_print(@get_int(status.ok));
+    // expected-remark @+1 {{10}}
+    @comptime_print(@get_int(status.warning));
+    // expected-remark @+1 {{20}}
+    @comptime_print(@get_int(status.failed));
+}
+
+// -----
+
+// =============================================================================
+// Cast enum to integer
+// =============================================================================
+
+const level = enum(u8) {
+    zero,
+    one,
+    two,
+};
+
+comptime {
+    const l = level.two;
+    const val: u8 = @as(u8, l);
+    // expected-remark @+1 {{2}}
+    @comptime_print(val);
+}
+
+// -----
+
+// =============================================================================
+// Cast integer to enum
+// =============================================================================
+
+const flags = enum(u16) {
+    none,
+    some = 5,
+    all = 10,
+};
+
+comptime {
+    const f: flags = @as(flags, 5);
+    // expected-remark @+1 {{.some}}
+    @comptime_print(f);
+    // expected-remark @+1 {{true}}
+    @comptime_print(f == flags.some);
+}
+
+// -----
+
+// =============================================================================
+// Enum in comptime if
+// =============================================================================
+
+const compass = enum(u8) {
+    north,
+    east,
+    south,
+    west,
+};
+
+comptime {
+    const d = compass.east;
+    var result: comptime_int = 0;
+    if (d == compass.north) {
+        result = 1;
+    } else if (d == compass.east) {
+        result = 2;
+    } else if (d == compass.south) {
+        result = 3;
+    } else {
+        result = 4;
+    }
+    // expected-remark @+1 {{2}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Enum variables
+// =============================================================================
+
+const state = enum(u8) {
+    idle,
+    running,
+    stopped,
+};
+
+comptime {
+    var current: state = state.idle;
+    // expected-remark @+1 {{.idle}}
+    @comptime_print(current);
+
+    current = state.running;
+    // expected-remark @+1 {{.running}}
+    @comptime_print(current);
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Less-than comparison not supported for enums
+// =============================================================================
+
+const nums = enum(u8) { a, b, c };
+
+comptime {
+    // expected-error @+1 {{only == and != are supported for enum values}}
+    const result = nums.a < nums.b;
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Greater-than comparison not supported for enums
+// =============================================================================
+
+const vals = enum(u8) { x, y, z };
+
+comptime {
+    // expected-error @+1 {{only == and != are supported for enum values}}
+    const result = vals.x > vals.y;
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Cast to invalid enum value
+// =============================================================================
+
+const small = enum(u8) {
+    zero,
+    one,
+    two,
+};
+
+comptime {
+    // expected-remark @+2 {{integer value 99 does not correspond to a valid enum element}}
+    // expected-error @+1 {{cannot cast value to target type}}
+    const s: small = @as(small, 99);
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Duplicate enum values
+// =============================================================================
+
+// expected-error @+1 {{duplicate enum value 0}}
+export const dup = enum(u8) {
+    first,
+    second = 0,
+};
+
+// -----
+
+// =============================================================================
+// ERROR: Comparing different enum types
+// =============================================================================
+
+const colors = enum(u8) { red, green, blue };
+const sizes = enum(u8) { small, medium, large };
+
+comptime {
+    const c = colors.red;
+    const s = sizes.small;
+    // expected-error @+1 {{incompatible types for binary operation: enum(u8) { red, green, blue } and enum(u8) { small, medium, large }}}
+    const result = c == s;
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Invalid enum element access
+// =============================================================================
+
+const things = enum(u8) { foo, bar };
+
+comptime {
+    // expected-error @+1 {{element 'baz' not found in enum type}}
+    const t = things.baz;
+}
+
+// -----
+
+// =============================================================================
+// Enum value stored in comptime struct and accessed via field
+// =============================================================================
+
+const heading = enum(u8) { north, east, south, west };
+
+comptime {
+    const dirs = .{ .pos = heading.east, .neg = heading.west };
+
+    // expected-remark @+1 {{.east}}
+    @comptime_print(dirs.pos);
+    // expected-remark @+1 {{.west}}
+    @comptime_print(dirs.neg);
+
+    // expected-remark @+1 {{true}}
+    @comptime_print(dirs.pos == heading.east);
+}

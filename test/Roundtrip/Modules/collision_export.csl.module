@@ -1,0 +1,6 @@
+// Module for collision test - exports same name as top-level function
+
+// expected-remark @+1 {{previous definition here}}
+export fn exported_func(x: i32) i32 {
+    return x * 3;
+}

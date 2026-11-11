@@ -1,0 +1,141 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic task declaration with valid integer parameter
+// =============================================================================
+
+task my_task(id: i16) void {
+}
+
+comptime {
+  @bind_local_task(my_task, @get_local_task_id(0));
+}
+
+// -----
+
+// =============================================================================
+// Task with multiple integer parameters
+// =============================================================================
+
+task multi_param_task(a: i32, b: i16, c: u8) void {
+}
+
+comptime {
+  @bind_local_task(multi_param_task, @get_local_task_id(1));
+}
+
+// -----
+
+// =============================================================================
+// Task with float parameter
+// =============================================================================
+
+task float_task(x: f32) void {
+}
+
+comptime {
+  @bind_local_task(float_task, @get_local_task_id(2));
+}
+
+// -----
+
+// =============================================================================
+// Task with mixed integer and float parameters
+// =============================================================================
+
+task mixed_task(id: i16, value: f32, count: u32) void {
+}
+
+comptime {
+  @bind_local_task(mixed_task, @get_local_task_id(3));
+}
+
+// -----
+
+// =============================================================================
+// Task with no parameters
+// =============================================================================
+
+task no_param_task() void {
+}
+
+comptime {
+  @bind_local_task(no_param_task, @get_local_task_id(4));
+}
+
+// -----
+
+// =============================================================================
+// Error: task with inline modifier
+// =============================================================================
+
+// expected-error @+1 {{tasks cannot have 'inline' modifier}}
+inline task bad_inline_task() void {
+}
+
+// -----
+
+// =============================================================================
+// Error: task with export modifier
+// =============================================================================
+
+// expected-error @+1 {{tasks cannot have 'export' modifier}}
+export task bad_export_task() void {
+}
+
+// -----
+
+// =============================================================================
+// Error: task with extern modifier
+// =============================================================================
+
+// expected-error @+1 {{tasks cannot have 'extern' modifier}}
+extern task bad_extern_task() void;
+
+// -----
+
+// =============================================================================
+// Error: task with comptime parameter
+// =============================================================================
+
+// expected-error @+1 {{tasks cannot have comptime or anytype parameters}}
+task bad_comptime_task(comptime x: i32) void {
+}
+
+// -----
+
+// =============================================================================
+// Error: task with anytype parameter
+// =============================================================================
+
+// expected-error @+1 {{tasks cannot have comptime or anytype parameters}}
+task bad_anytype_task(x: anytype) void {
+}
+
+// -----
+
+// =============================================================================
+// Error: task with pointer parameter type
+// =============================================================================
+
+// expected-error @+1 {{task parameter 0 has invalid type '*i32'; task parameters must be integer or float types}}
+task bad_ptr_task(ptr: *i32) void {
+}
+
+comptime {
+  @bind_local_task(bad_ptr_task, @get_local_task_id(10));
+}
+
+// -----
+
+// =============================================================================
+// Error: task with array parameter type
+// =============================================================================
+
+// expected-error @+1 {{task parameter 0 has invalid type '[4]i32'; task parameters must be integer or float types}}
+task bad_array_task(arr: [4]i32) void {
+}
+
+comptime {
+  @bind_local_task(bad_array_task, @get_local_task_id(11));
+}

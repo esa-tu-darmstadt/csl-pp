@@ -1,0 +1,204 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false
+
+// =============================================================================
+// Recursion through an indirect call: the possible callees of an indirect
+// call are call edges like direct calls.
+// =============================================================================
+
+const STATE_ICALL: local_task_id = @get_local_task_id(1);
+
+async task root_icall() void {
+  recursive_icall();
+}
+
+fn recursive_icall() void {
+  var fp: *const fn() void = recursive_icall;
+  // expected-error@+1 {{recursive calls recursive_icall -> recursive_icall are reachable from an async task}}
+  fp();
+}
+
+comptime {
+  @bind_local_task(root_icall, STATE_ICALL);
+}
+
+// -----
+
+// =============================================================================
+// Extern function called from an async-reachable function — the resolver
+// has no body to walk, so a `stack_size(N)` override is required.
+// =============================================================================
+
+const STATE_EXT: local_task_id = @get_local_task_id(1);
+
+// expected-error@+1 {{extern function 'ext_fn' is reachable from an async task but has no `stack_size(N)`}}
+extern fn ext_fn() void;
+
+async task root_extern() void {
+  ext_fn();
+}
+
+comptime {
+  @bind_local_task(root_extern, STATE_EXT);
+}
+
+// -----
+
+// =============================================================================
+// Direct self-recursion in a sync helper reachable from an async task.  The
+// call is not a tail call, which would become a loop.
+// =============================================================================
+
+const STATE_REC: local_task_id = @get_local_task_id(1);
+var depth: u16 = 0;
+
+async task root_recursive() void {
+  recursive_self();
+}
+
+fn recursive_self() void {
+  // expected-error@+1 {{recursive calls recursive_self -> recursive_self are reachable from an async task}}
+  recursive_self();
+  depth += 1;
+}
+
+comptime {
+  @bind_local_task(root_recursive, STATE_REC);
+}
+
+// -----
+
+// =============================================================================
+// Mutual recursion (A -> B -> A) in sync code reachable from an async task.
+// The cycle is reported at the call site closing the cycle.
+// =============================================================================
+
+const STATE_MUT: local_task_id = @get_local_task_id(1);
+
+async task root_mutual() void {
+  funA();
+}
+
+fn funA() void {
+  funB();
+}
+
+fn funB() void {
+  // expected-error@+1 {{recursive calls funA -> funB -> funA are reachable from an async task}}
+  funA();
+}
+
+comptime {
+  @bind_local_task(root_mutual, STATE_MUT);
+}
+
+// -----
+
+// =============================================================================
+// Recursion between two async fns linked by `@await` — same rejection.
+// =============================================================================
+
+const STATE_AMUT: local_task_id = @get_local_task_id(1);
+
+async task root_async_mutual() void {
+  @await(asyncA());
+}
+
+async fn asyncA() void {
+  @await(asyncB());
+}
+
+async fn asyncB() void {
+  // expected-error@+1 {{recursive calls asyncA -> asyncB -> asyncA are reachable from an async task}}
+  @await(asyncA());
+}
+
+comptime {
+  @bind_local_task(root_async_mutual, STATE_AMUT);
+}
+
+// -----
+
+// =============================================================================
+// Recursion through a callee of a multi-callee @await_parallel: its stack
+// region has a fixed size, so it cannot hold a recursion.  An annotation
+// does not help.
+// =============================================================================
+
+const STATE_PAR: local_task_id = @get_local_task_id(1);
+
+async task root_parallel() void {
+  @await(walk(3));
+}
+
+async fn walk(n: u16) max_recursion_depth(4) void {
+  if (n == 0) {
+    return;
+  }
+  // Both calls are reported.
+  // expected-error@+1 {{recursive calls walk -> walk run through @await_parallel: each callee of an @await_parallel with several callees gets a stack region of fixed size, which cannot hold a recursion; call 'walk' outside of @await_parallel, directly or with @await}}
+  @await_parallel(walk(n - 1), walk(n - 1));
+}
+
+comptime {
+  @bind_local_task(root_parallel, STATE_PAR);
+}
+
+// -----
+
+// =============================================================================
+// Recursion through @await_parallel via another function.
+// =============================================================================
+
+const STATE_PAR2: local_task_id = @get_local_task_id(1);
+
+async task root_parallel2() void {
+  @await(outer(3));
+}
+
+async fn outer(n: u16) max_recursion_depth(4) void {
+  if (n == 0) {
+    return;
+  }
+  // expected-error@+1 {{recursive calls outer -> inner -> outer run through @await_parallel}}
+  @await_parallel(inner(n - 1), leaf_par());
+}
+
+async fn inner(n: u16) void {
+  @await(outer(n));
+}
+
+async fn leaf_par() void {}
+
+comptime {
+  @bind_local_task(root_parallel2, STATE_PAR2);
+}
+
+// -----
+
+// =============================================================================
+// max_recursion_depth counts activations, so it must be at least 1.
+// =============================================================================
+
+// expected-error@+1 {{max_recursion_depth must be at least 1: it counts the calls of 'zero_depth' that may be active at the same time, including the outermost one}}
+fn zero_depth(n: u16) max_recursion_depth(0) u16 {
+  return n;
+}
+
+// -----
+
+// =============================================================================
+// An async task has no stack to run on until @coro_runtime_init() has set up
+// the runtime, so a program that binds one must call it.
+// =============================================================================
+
+const STATE_NOINIT: local_task_id = @get_local_task_id(10);
+
+async task root_noinit() void {}
+
+fn fstart_noinit() void { @activate(STATE_NOINIT); }
+
+comptime {
+  // expected-error@+1 {{async task 'root_noinit' is bound to a task, but the program never calls @coro_runtime_init(); call it once before the first async task is activated, for example in the function the host launches}}
+  @bind_local_task(root_noinit, STATE_NOINIT);
+  @export_symbol(fstart_noinit);
+}

@@ -1,0 +1,78 @@
+---
+title: 1. The solver loop
+description: The conjugate gradient loop as an async task that awaits library calls.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+The first step writes the loop of the algorithm in the PE program. The stencil product and the sums over all PEs are calls of library functions; the vector updates are DSD operations on the local arrays.
+
+## The CSL version
+
+In CSL, a library call that uses the fabric does not return a result; it activates a task when the result is there. The conjugate gradient benchmark of the SDK therefore writes the loop as a state machine. One task is activated after every library call and continues with the state that was set before the call:
+
+```csl
+const STATE_SPMV_AP: i16 = 7;
+const STATE_ETA: i16 = 8;
+const STATE_UPDATE_X_R_RHO: i16 = 9;
+// ...
+
+task f_state() void {
+    // ...
+    } else if (STATE_SPMV_AP == cur_state) {
+        next_state = STATE_ETA;
+        // w = A*p
+        f_spmv_Ap();
+
+    } else if (STATE_ETA == cur_state) {
+        next_state = STATE_UPDATE_X_R_RHO;
+        // eta = np.dot(p,w) = (p_{k}, A*p_{k})
+        f_eta();
+
+    } else if (STATE_UPDATE_X_R_RHO == cur_state) {
+        next_state = STATE_CONV_CHECK;
+        // alpha = rho/eta, x = x + alpha * p, r = r - alpha * w, ...
+        f_update_x_r_rho();
+    // ...
+}
+
+fn f_trigger_state_machine() void {
+    cur_state = next_state;
+    @activate(STATE);
+}
+```
+
+`f_trigger_state_machine` is passed to the libraries as the callback they activate. The loop counter, `rho` and `rho_old` are globals, because the task starts anew on every activation.
+
+## The csl++ version
+
+In csl++, the loop is one `async task`. A library call is awaited, and the code after it runs when the result is there:
+
+<Example file="tutorial/cg/src/pe.csl" region="solver" />
+
+The task is the algorithm, line by line. `k`, `rho_old`, `eta`, `alpha` and `beta` are local variables. `@await(f(...))` calls the async function `f` and returns its result; while `f` waits for the fabric, the task is suspended, and other tasks of the PE run. `rho` is an array of one element because `allreduce` reduces an array in place. `eta` is a local variable; `@ptrcast` turns its address into the pointer type that `allreduce` takes.
+
+The libraries are imported like any CSL module, with the parameters that the layout file passes in:
+
+<Example file="tutorial/cg/src/pe.csl" region="imports" />
+
+`stencil.spmv` and `reduce.allreduce` are async functions of the libraries. How they work inside is the subject of the [next step](../2-library/).
+
+## Launching the task
+
+The host calls `solve`, which stores the arguments, sets the lengths of the DSDs, initializes the async runtime and activates the task:
+
+<Example file="tutorial/cg/src/pe.csl" region="launch" />
+
+`@coro_runtime_init()` must run once before the first async task is activated; `csl-pp` reports an error if a program binds an async task and never calls it. The task is bound to a local task ID that the program claims with `@claim_local_task()` instead of choosing a number.
+
+The task calls `sys_mod.unblock_cmd_stream()` at the end, as the last task of the chain would in CSL: it tells the host that `solve` is complete.
+
+<Aside>
+The host program `run.py` writes `b`, `x` and the stencil coefficients with memcpy, calls `solve(n, tol, max_ite)` with `runner.launch`, and reads `x` and `rho` back. It is the same host program a CSL version would have.
+</Aside>
+
+In the [next step](../2-library/), the stencil library shows what happens inside an async function.

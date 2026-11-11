@@ -1,0 +1,41 @@
+---
+title: Overview
+description: List of the extensions csl++ adds to CSL.
+---
+
+csl++ is CSL with the extensions listed on this page. Every CSL program is a csl++ program. `csl-pp` translates csl++ to vanilla CSL, so the extensions need no support from `cslc`.
+
+## Declarations and statements
+
+| Syntax | Meaning | Page |
+| --- | --- | --- |
+| `async fn f(...) T { ... }` | A function that can suspend. | [Async functions and tasks](../async/) |
+| `async task t() void { ... }` | A task that can suspend. | [Async functions and tasks](../async/) |
+| `suspend;` | Ends the current run of the task; the next activation continues after it. | [Async functions and tasks](../async/#suspend) |
+| `fn f(...) max_recursion_depth(N) T` | Bounds the recursion of `f` for stack sizing. | [Stacks](../stacks/#max_recursion_depthn) |
+| `fn f(...) stack_size(N) T` | Declares the stack use of `f` in bytes. | [Stacks](../stacks/#stack_sizen) |
+
+`async` and `suspend` are only keywords in these positions; elsewhere they are ordinary identifiers.
+
+## Builtins
+
+| Builtin | Result | Page |
+| --- | --- | --- |
+| `@await(f(...))` | The result of `f` | [Calling async functions](../calls/) |
+| `@await_parallel(f(...), g(...), ...)` | A tuple of the results | [Calling async functions](../calls/#await_parallel) |
+| `@current_task()` | `local_task_id` | [Async functions and tasks](../async/#current_task) |
+| `@coro_runtime_init()` | `void` | [Async functions and tasks](../async/#coro_runtime_init) |
+| `@claim_color()` | `color` | [Claims](../resources/) |
+| `@claim_local_task()` | `local_task_id` | [Claims](../resources/) |
+| `@claim_data_task()` | `data_task_id` | [Claims](../resources/) |
+| `@claim_control_task()` | `control_task_id` | [Claims](../resources/) |
+| `@claim_input_queue()` | `input_queue` | [Claims](../resources/) |
+| `@claim_output_queue()` | `output_queue` | [Claims](../resources/) |
+| `@release_color(id)` and the other `@release_*` | `void` | [Claims](../resources/#releasing-resources) |
+| `@count_free(T)` | `u16` | [Claims](../resources/#counting-free-resources) |
+
+## Changed builtins
+
+| Builtin | Change | Page |
+| --- | --- | --- |
+| `@bind_local_task`, `@bind_data_task`, `@bind_control_task` | Can be called at runtime. | [Binding tasks at runtime](../runtime-binding/) |

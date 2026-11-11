@@ -1,0 +1,46 @@
+// SUMMA matrix multiplication on a P x P rectangle of PEs.
+//
+// Coroutine version — collectives_2d routing colors are claimed internally.
+
+param P: u16;
+
+// Matrix dimensions on one PE
+param Mt: u16;
+param Kt: u16;
+param Nt: u16;
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+    .width  = P,
+    .height = P,
+});
+
+const c2d = @import_module("../csl-libs/collectives_2d/layout.csl");
+
+layout {
+    @set_rectangle(P, P);
+
+    var Px: u16 = 0;
+    while (Px < P) : (Px += 1) {
+        const memcpy_params = memcpy.get_params(Px);
+        var Py: u16 = 0;
+        while (Py < P) : (Py += 1) {
+            const c2d_params = c2d.get_params(Px, Py);
+            @set_tile_code(Px, Py, "pe.csl", .{
+                .memcpy_params = memcpy_params,
+                .c2d_params    = c2d_params,
+                .Mt = Mt, .Kt = Kt, .Nt = Nt,
+            });
+        }
+    }
+
+    @export_name("A", [*]f32, true);
+    @export_name("B", [*]f32, true);
+    @export_name("C", [*]f32, true);
+    @export_name("time_buf_u16", [*]u16, true);
+    @export_name("f_init",              fn()void);
+    @export_name("f_enable_timer",      fn()void);
+    @export_name("f_tic",               fn()void);
+    @export_name("f_toc",               fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
+    @export_name("main",                fn()void);
+}

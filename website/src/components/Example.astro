@@ -1,0 +1,78 @@
+---
+// Shows a file of website/examples or of csl-libs/, or one region of it.
+//
+// Every example is a complete program that the integration tests compile and
+// run, and the libraries are used by the examples and the benchmarks, so the
+// code on the site is the code that is tested. A region is marked in the
+// file by `// region: <name>` and `// endregion` lines (`#` in Python and
+// shell files) and can contain other regions; marker lines never appear on
+// the site.
+import { Code } from '@astrojs/starlight/components';
+
+interface Props {
+  /**
+   * Path below website/examples, e.g. "tutorial/cg/src/pe.csl", or below the
+   * repository root for a library, e.g. "csl-libs/allreduce/pe.csl".
+   */
+  file: string;
+  /** Name of the region to show; the whole file if omitted. */
+  region?: string;
+  /** Title of the code block; the file name if omitted. */
+  title?: string;
+  /** Lines (1-based, relative to what is shown) to highlight, e.g. "3-5". */
+  mark?: string;
+}
+
+const { file, region, title, mark } = Astro.props;
+
+const sources = import.meta.glob('/examples/**/*.{csl,py,sh}', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+const libraries = import.meta.glob('../../../csl-libs/**/*.csl', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+const source = file.startsWith('csl-libs/')
+  ? libraries[`../../../${file}`]
+  : sources[`/examples/${file}`];
+if (source === undefined) throw new Error(`Example file not found: ${file}`);
+
+const marker = /^\s*(?:\/\/|#) (region|endregion)(?:: (\S+))?\s*$/;
+const lines: string[] = [];
+// Regions can nest; `open` holds the names of the regions around a line.
+const open: string[] = [];
+let found = region === undefined;
+for (const line of source.split('\n')) {
+  const match = line.match(marker);
+  if (match) {
+    if (match[1] === 'region') {
+      open.push(match[2] ?? '');
+      if (match[2] === region) found = true;
+    } else {
+      open.pop();
+    }
+    continue;
+  }
+  if (region === undefined || open.includes(region)) lines.push(line);
+}
+if (!found) throw new Error(`Region '${region}' not found in ${file}`);
+
+while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+while (lines.length > 0 && lines[0].trim() === '') lines.shift();
+const indent = Math.min(
+  ...lines.filter((l) => l.trim() !== '').map((l) => l.match(/^ */)![0].length),
+);
+const code = lines.map((l) => l.slice(indent)).join('\n');
+
+const lang = file.endsWith('.py') ? 'python' : file.endsWith('.sh') ? 'bash' : 'csl';
+// By default, the path within the example, e.g. "src/pe.csl", or the path of
+// a library file within csl-libs/.
+const shownTitle =
+  title ?? (file.startsWith('csl-libs/') ? file.slice('csl-libs/'.length) : file.split('/').slice(2).join('/'));
+---
+
+<Code code={code} lang={lang} title={shownTitle} mark={mark} />

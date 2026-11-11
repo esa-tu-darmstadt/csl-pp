@@ -1,0 +1,58 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Unnecessary labeled block is erased (trailing break removed, then inlined)
+// =============================================================================
+
+// CHECK: export fn unnecessary_block(param0: i32) i32 {
+// CHECK:     var result: i32 = @as(i32, 0);
+// CHECK:     result = param0 + @as(i32, 1);
+// CHECK:     return result;
+// CHECK: }
+export fn unnecessary_block(x: i32) i32 {
+    var result: i32 = 0;
+    blk: {
+        result = x + 1;
+        break :blk;
+    }
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Labeled block fallthrough (no break) — block is erased by canonicalization
+// =============================================================================
+
+// CHECK: export fn labeled_fallthrough() i32 {
+// CHECK:     var x: i32 = @as(i32, 0);
+// CHECK:     x = @as(i32, 42);
+// CHECK:     return x;
+// CHECK: }
+export fn labeled_fallthrough() i32 {
+    var x: i32 = 0;
+    blk: {
+        x = 42;
+    }
+    return x;
+}
+
+// -----
+
+// =============================================================================
+// SetVector deduplication: both branches break with the same value.
+// The labeled block result is comptime-known (42), so return uses it directly.
+// =============================================================================
+
+// CHECK: export fn dedup_break(param0: bool) i32 {
+// CHECK:     return @as(i32, 42);
+// CHECK: }
+export fn dedup_break(x: bool) i32 {
+    return blk: {
+        if (x) {
+            break :blk @as(i32, 42);
+        } else {
+            break :blk @as(i32, 42);
+        }
+    };
+}

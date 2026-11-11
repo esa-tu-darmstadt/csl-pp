@@ -1,0 +1,73 @@
+---
+title: stencil_3d_7pts
+description: Product of a vector with a 7-point stencil matrix on a 3D grid distributed over the rectangle.
+sidebar:
+  order: 2
+---
+
+`csl-libs/stencil_3d_7pts` multiplies a vector by the matrix of a 7-point stencil on a three-dimensional grid. Each PE holds a column of `n` points in z; the x and y neighbors of a point are on the neighboring PEs. It is the csl++ port of the `stencil_3d_7pts` library of the SDK benchmarks.
+
+The product is
+
+```
+y[k] = c_west   * x_west[k]  + c_east  * x_east[k]
+     + c_south  * x_south[k] + c_north * x_north[k]
+     + c_bottom * x[k-1]     + c_top   * x[k+1]
+     + c_center * x[k]
+```
+
+with `x[-1] = x[n] = 0`, where `x_west` is the column of the west neighbor and so on. The coefficients can differ per PE, which allows boundary conditions to be folded into them.
+
+## Layout part
+
+```csl
+const stencil = @import_module("stencil_3d_7pts/layout.csl", .{
+  .width = width,    // i16, width of the rectangle
+  .height = height,  // i16, height of the rectangle
+});
+```
+
+`stencil.get_params(px, py)` returns the parameters of the PE part for the PE at `(px, py)`. The module claims eight colors, two per direction, which alternate from PE to PE so that a PE never sends and receives on the same color.
+
+## PE part
+
+```csl
+const stencil = @import_module("stencil_3d_7pts/pe.csl", .{
+  .stencil_params = stencil_params,  // from get_params
+  .BLOCK_SIZE = 2,                   // i16
+  .output_ut_id = 7,                 // WSE-3 only
+  .dsr_ids = [2]u16{2, 3},           // default {2, 3}
+  .impl = "async",                   // or "hybrid"; default "async"
+});
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `stencil_params` | The struct from `get_params` of the layout part. |
+| `BLOCK_SIZE` | Number of points exchanged with a neighbor at a time. A larger block means fewer exchanges and larger buffers. |
+| `output_ut_id` | WSE-3: the microthread that the sends use. It must differ from the numbers of the input queues of this library and of every module whose receives can run at the same time, because an operation without an explicit microthread uses the one with the number of its queue. Unused on WSE-2. |
+| `dsr_ids` | Indices of the two DSR sets that the sends and the receives use. |
+| `impl` | The implementation, see below. |
+
+The module claims four input queues and, on WSE-3, four output queues, or one output queue on WSE-2. The `"hybrid"` implementation also claims three local task IDs.
+
+### `spmv`
+
+```csl
+async fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void
+```
+
+Computes `y = A x` for the local column `x[0..n)`, with the coefficients `coeff[0..7)` in the order west, east, south, north, bottom, top, center. `n` must be at least 2.
+
+## Implementations
+
+The library exchanges the column with the four neighbors in blocks. The two implementations differ in how the exchange of a block is driven; the DSD operations, routes and queues are the same.
+
+**`"async"`**, the default. The sends to the four neighbors and the receives from them are two async functions that run at the same time with `@await_parallel`, one block after the other. The library claims no task IDs; the worker task of `@await_parallel` is claimed while a product runs. Each transfer costs a suspend. The [tutorial](../../tutorial/2-library/) shows this implementation.
+
+**`"hybrid"`**. The sends and receives are tasks that continue each other, as in the library of the SDK, and `spmv` suspends once per product until they are done. The library claims three local task IDs at compile time. This is the faster implementation when the column is short, and it is the one the stencil benchmarks use.
+
+## Requirements
+
+- At most one product of an instance runs at a time.
+- The program is at least 2 PEs wide and high only if the grid is; a single row or column works, the edge PEs skip the missing directions.

@@ -1,0 +1,59 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+//
+// Like cslc, a call is only evaluated at comptime in comptime code or when it
+// provides a type annotation.  A runtime call to a function returning a
+// comptime-only type is an error.
+
+// CHECK-NOT: fn make_type
+fn make_type() type {
+  return i32;
+}
+
+// CHECK-NOT: fn wrap
+fn wrap(comptime T: type) type {
+  return T;
+}
+
+// CHECK-NOT: fn two
+fn two() comptime_int {
+  return 2;
+}
+
+// CHECK-LABEL: export fn type_annotations() i32 {
+// CHECK-NEXT:    var a: i32 = @as(i32, 1);
+// CHECK-NEXT:    var b: i32 = @as(i32, 2);
+// CHECK-NEXT:    var c: [2]i32;
+// CHECK-NEXT:    var d: i32 = @as(i32, 3);
+export fn type_annotations() i32 {
+  var a: make_type() = 1;
+  const alias = make_type;
+  var b: alias() = 2;
+  var c: [two()]wrap(i32);
+  const T = comptime make_type();
+  var d: T = 3;
+  c[0] = a + b + d;
+  return c[0];
+}
+
+// -----
+
+fn make_type() type {
+  return i32;
+}
+
+export fn runtime_call() void {
+  // expected-error@+1 {{'make_type' returns 'type', which is not valid at runtime; call it at comptime with `comptime make_type(...)`}}
+  const T = make_type();
+}
+
+// -----
+
+fn make_type() type {
+  return i32;
+}
+
+export fn runtime_call_through_alias() void {
+  const alias = make_type;
+  // expected-error@+1 {{'make_type' returns 'type', which is not valid at runtime; call it at comptime with `comptime make_type(...)`}}
+  const T = alias();
+}

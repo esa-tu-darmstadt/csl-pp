@@ -1,0 +1,219 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Comptime-known integer casts
+// =============================================================================
+
+// Test: comptime-known i32 fits in i16 - should work
+export fn test_literal_i32_to_i16() i16 {
+    const comptimeKnownInt : i32 = 42;
+    var x: i16 = comptimeKnownInt;
+    return x;
+}
+
+// -----
+
+// =============================================================================
+// Comptime-known integer casts with global (was bug)
+// =============================================================================
+
+// Test: comptime-known i32 fits in i16 - should work
+const comptimeKnownInt : i32 = 42;
+export fn test_literal_i32_to_i16() i16 {
+    var x: i16 = comptimeKnownInt;
+    return x;
+}
+
+// -----
+
+// =============================================================================
+// Runtime integer casts (should fail)
+// =============================================================================
+
+// Test: runtime value - implicit cast should fail
+export fn test_runtime_cast(val: i32) i16 {
+    // expected-error @+1 {{implicit cast from i32 to i16 is not allowed}}
+    var x: i16 = val;  // val is not comptime-known
+    return x;
+}
+
+// -----
+
+// =============================================================================
+// Comptime-known i32 narrowing to i8 (fits)
+// =============================================================================
+
+comptime {
+  const val: i32 = 42;
+  var x: i8 = val;
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+  // expected-remark @+1 {{i8}}
+  @comptime_print(@type_of(x));
+}
+
+// -----
+
+// =============================================================================
+// Comptime-known i32 narrowing to i8 (overflow - doesn't fit)
+// =============================================================================
+
+comptime {
+  const val: i32 = 300;
+  // expected-error @+2 {{failed to cast initializer to variable type}}
+  // expected-remark @+1 {{value 300 overflows 8-bit signed integer}}
+  var x: i8 = val;
+}
+
+// -----
+
+// =============================================================================
+// Comptime int to signed int boundary values
+// =============================================================================
+
+comptime {
+  // i8 range: -128 to 127
+  var a: i8 = 127;
+  // expected-remark @+1 {{127}}
+  @comptime_print(a);
+  // expected-remark @+1 {{i8}}
+  @comptime_print(@type_of(a));
+
+  var b: i8 = -128;
+  // expected-remark @+1 {{-128}}
+  @comptime_print(b);
+
+  // i16 range: -32768 to 32767
+  var c: i16 = 32767;
+  // expected-remark @+1 {{32767}}
+  @comptime_print(c);
+  // expected-remark @+1 {{i16}}
+  @comptime_print(@type_of(c));
+
+  var d: i16 = -32768;
+  // expected-remark @+1 {{-32768}}
+  @comptime_print(d);
+}
+
+// -----
+
+// =============================================================================
+// Comptime int to unsigned int boundary values
+// =============================================================================
+
+comptime {
+  // u8 range: 0 to 255
+  var a: u8 = 255;
+  // expected-remark @+1 {{255}}
+  @comptime_print(a);
+  // expected-remark @+1 {{u8}}
+  @comptime_print(@type_of(a));
+
+  var b: u8 = 0;
+  // expected-remark @+1 {{0}}
+  @comptime_print(b);
+
+  // u16 range: 0 to 65535
+  var c: u16 = 65535;
+  // expected-remark @+1 {{65535}}
+  @comptime_print(c);
+  // expected-remark @+1 {{u16}}
+  @comptime_print(@type_of(c));
+}
+
+// -----
+
+// =============================================================================
+// Comptime int to unsigned - negative value fails
+// =============================================================================
+
+comptime {
+  // expected-error @+2 {{failed to cast initializer to variable type}}
+  // expected-remark @+1 {{comptime_int value -1 does not fit in u8}}
+  var x: u8 = -1;
+}
+
+// -----
+
+// =============================================================================
+// Comptime int to signed - overflow
+// =============================================================================
+
+comptime {
+  // 128 doesn't fit in i8 (max 127)
+  // expected-error @+2 {{failed to cast initializer to variable type}}
+  // expected-remark @+1 {{comptime_int value 128 does not fit in i8}}
+  var x: i8 = 128;
+}
+
+// -----
+
+// =============================================================================
+// Comptime int to unsigned - overflow
+// =============================================================================
+
+comptime {
+  // 256 doesn't fit in u8 (max 255)
+  // expected-error @+2 {{failed to cast initializer to variable type}}
+  // expected-remark @+1 {{comptime_int value 256 does not fit in u8}}
+  var x: u8 = 256;
+}
+
+// -----
+
+// =============================================================================
+// Explicit cast: int to float
+// =============================================================================
+
+comptime {
+  const val: i32 = 42;
+  var x: f32 = @as(f32, val);
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+  // expected-remark @+1 {{f32}}
+  @comptime_print(@type_of(x));
+}
+
+// -----
+
+// =============================================================================
+// Explicit cast: float to int (truncation)
+// =============================================================================
+
+comptime {
+  const val: f32 = 42.7;
+  var x: i32 = @as(i32, val);
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+  // expected-remark @+1 {{i32}}
+  @comptime_print(@type_of(x));
+}
+
+// -----
+
+// =============================================================================
+// Explicit cast: signed to unsigned (positive value)
+// =============================================================================
+
+comptime {
+  const val: i32 = 42;
+  var x: u32 = @as(u32, val);
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+  // expected-remark @+1 {{u32}}
+  @comptime_print(@type_of(x));
+}
+
+// -----
+
+// =============================================================================
+// Comptime float to f32 (implicit)
+// =============================================================================
+
+comptime {
+  var x: f32 = 3.14;
+  // expected-remark @+1 {{3.1400001}}
+  @comptime_print(x);
+  // expected-remark @+1 {{f32}}
+  @comptime_print(@type_of(x));
+}

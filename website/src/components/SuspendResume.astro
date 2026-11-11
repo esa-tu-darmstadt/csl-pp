@@ -1,0 +1,110 @@
+---
+// Suspend and resume: what the runtime stores per task, and how a later
+// activation of the task gets back into the suspended function.
+---
+
+<figure class="susres" aria-label="Left: the suspending task saves its resume address and stack pointer into the slot of its task ID and terminates. Middle: the slot, one per task ID, holds SP and PC. Right: when the task is activated again, the runtime's entry function reads the slot, sets the stack pointer and jumps to the resume address, where the compiler-generated code reloads the spilled registers.">
+  <svg viewBox="0 0 760 250" role="img">
+    <defs>
+      <marker id="sarrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead" />
+      </marker>
+    </defs>
+
+    <!-- Suspend side -->
+    <g class="col">
+      <rect x="0" y="0" width="250" height="250" rx="10" class="colbox cslpp" />
+      <text x="125" y="24" class="title">suspend</text>
+      <text x="14" y="56" class="step">1  compiler spills the live registers</text>
+      <text x="14" y="78" class="step">    to the stack</text>
+      <text x="14" y="108" class="step">2  store the resume address</text>
+      <text x="14" y="138" class="step">3  store the stack pointer</text>
+      <text x="14" y="168" class="step">4  nop.term: the hardware task ends;</text>
+      <text x="14" y="190" class="step">    other tasks run</text>
+      <text x="14" y="226" class="code">ip after suspend ➜ resume label</text>
+    </g>
+
+    <!-- Slot -->
+    <g class="slot">
+      <rect x="290" y="70" width="180" height="110" rx="8" />
+      <text x="380" y="92" class="slot-title">slot of task ID n</text>
+      <text x="304" y="118" class="slot-field">pool_pc[n]  = resume address</text>
+      <text x="304" y="140" class="slot-field">pool_sp[n]  = stack pointer</text>
+      <text x="304" y="162" class="slot-field">caller, join counter, …</text>
+    </g>
+    <path class="flow" d="M 250 110 H 288" />
+    <path class="flow" d="M 470 140 H 508" />
+
+    <!-- Resume side -->
+    <g class="col">
+      <rect x="510" y="0" width="250" height="250" rx="10" class="colbox cslpp" />
+      <text x="635" y="24" class="title">activation of task n</text>
+      <text x="524" y="56" class="step">5  the scheduler starts the task at</text>
+      <text x="524" y="78" class="step">    the runtime's entry function</text>
+      <text x="524" y="108" class="step">6  read the task ID from hardware</text>
+      <text x="524" y="138" class="step">7  set SP from the slot</text>
+      <text x="524" y="168" class="step">8  jump to the resume address</text>
+      <text x="524" y="198" class="step">9  compiler-generated code reloads</text>
+      <text x="524" y="220" class="step">    the registers; the function goes on</text>
+    </g>
+  </svg>
+</figure>
+
+<style>
+  .susres {
+    margin-block: 1.5rem 2rem;
+  }
+  .susres svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    font-family: var(--sl-font-system);
+  }
+  .colbox {
+    fill: var(--sl-color-gray-7, var(--sl-color-bg));
+    stroke: var(--cpp-orange);
+    stroke-width: 1.5;
+  }
+  .title {
+    text-anchor: middle;
+    font-size: 14px;
+    font-weight: 600;
+    fill: var(--cpp-orange);
+  }
+  .step {
+    font-size: 12.5px;
+    fill: var(--sl-color-white);
+    white-space: pre;
+  }
+  .code {
+    font-family: var(--sl-font-mono);
+    font-size: 11px;
+    fill: var(--sl-color-gray-2);
+  }
+  .slot rect {
+    fill: var(--cpp-teal-bg);
+    stroke: var(--cpp-teal);
+    stroke-width: 1.5;
+  }
+  .slot-title {
+    text-anchor: middle;
+    font-size: 13px;
+    font-weight: 600;
+    fill: var(--sl-color-white);
+  }
+  .slot-field {
+    font-family: var(--sl-font-mono);
+    font-size: 11px;
+    fill: var(--sl-color-white);
+    white-space: pre;
+  }
+  .flow {
+    fill: none;
+    stroke: var(--sl-color-gray-3);
+    stroke-width: 2;
+    marker-end: url(#sarrow);
+  }
+  .arrowhead {
+    fill: var(--sl-color-gray-3);
+  }
+</style>

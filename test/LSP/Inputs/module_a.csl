@@ -1,0 +1,6 @@
+const my_const: u32 = 42;
+var my_var: u32 = 0;
+
+fn add(x: u32, y: u32) u32 {
+    return x + y;
+}

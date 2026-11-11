@@ -1,0 +1,20 @@
+// RUN: csl-s2s %s --colors=x_in:1,ax_out:3 --colors=b_in:4 --verify-diagnostics
+
+// =============================================================================
+// Test --colors CLI option for passing color bindings
+// =============================================================================
+
+param x_in : color;
+param ax_out : color;
+param b_in : color;
+
+comptime {
+  // expected-remark @+1 {{@get_color(1)}}
+  @comptime_print(x_in);
+
+  // expected-remark @+1 {{@get_color(3)}}
+  @comptime_print(ax_out);
+
+  // expected-remark @+1 {{@get_color(4)}}
+  @comptime_print(b_in);
+}

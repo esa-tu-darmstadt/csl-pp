@@ -1,0 +1,179 @@
+// RUN: csl-s2s %s --split-input-file | FileCheck %s
+
+// =============================================================================
+// Builtin return type should not inherit lvalue from argument
+// Builtins using sameAsTypeOf(N) must strip lvalue from the arg type.
+// =============================================================================
+
+var data: [100]f32;
+var dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{10} -> data[i] });
+
+// CHECK: export fn modify_dsd() void {
+// CHECK:     dsd = @set_dsd_length(dsd, @as(u16, 20));
+// CHECK:     dsd = @increment_dsd_offset(dsd, @as(i16, 1), f32);
+// CHECK: }
+export fn modify_dsd() void {
+    dsd = @set_dsd_length(dsd, 20);
+    dsd = @increment_dsd_offset(dsd, 1, f32);
+}
+
+// -----
+
+// =============================================================================
+// @field - read and write struct fields by name
+// =============================================================================
+
+const MyStruct = struct {
+    x: i32,
+    y: i32,
+};
+
+// CHECK: const [[S:.*]] = struct { x: i32, y: i32 };
+
+// CHECK: fn field_read([[p:.*]]: [[S]]) i32 {
+// CHECK:     return [[p]].x;
+// CHECK: }
+fn field_read(s: MyStruct) i32 {
+    return @field(s, "x");
+}
+
+// CHECK: fn field_write() i32 {
+// CHECK:     var [[v:.*]]: [[S]] = [[S]] { .x = 1, .y = 2 };
+// CHECK:     [[v]].x = @as(i32, 42);
+// CHECK:     return [[v]].x;
+// CHECK: }
+fn field_write() i32 {
+    var s: MyStruct = MyStruct { .x = 1, .y = 2 };
+    @field(s, "x") = 42;
+    return s.x;
+}
+
+// CHECK: export fn test_field() i32 {
+export fn test_field() i32 {
+    return field_read(MyStruct { .x = 10, .y = 20 }) + field_write();
+}
+
+// -----
+
+// =============================================================================
+// @field - tuple access by numeric index
+// =============================================================================
+
+const MyTuple = @type_of(.{ @as(i32, 0), @as(f32, 0.0) });
+
+// CHECK: fn tuple_field_read([[p:.*]]: @type_of(.{ @as(i32, 0), @as(f32, 0.0) })) i32 {
+// CHECK:     return [[p]][0];
+// CHECK: }
+fn tuple_field_read(t: MyTuple) i32 {
+    return @field(t, "0");
+}
+
+// CHECK: fn tuple_field_write() i32 {
+// CHECK:     var [[v:.*]]: @type_of(.{ @as(i32, 0), @as(f32, 0.0) }) = .{ 1, 2.0
+// CHECK:     [[v]][0] = @as(i32, 42);
+// CHECK:     return [[v]][0];
+// CHECK: }
+fn tuple_field_write() i32 {
+    var t: MyTuple = .{ @as(i32, 1), @as(f32, 2.0) };
+    @field(t, "0") = 42;
+    return t[0];
+}
+
+// CHECK: export fn test_tuple_field() i32 {
+export fn test_tuple_field() i32 {
+    return tuple_field_read(.{ @as(i32, 10), @as(f32, 3.14) }) + tuple_field_write();
+}
+
+// -----
+
+// =============================================================================
+// @map - function pointers passed to @map must be properly instantiated
+// =============================================================================
+
+const dummy = @zeros([1]f32);
+var mem_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy[i] });
+
+fn reduce_fn(xval: f32, sum: *f32) f32 {
+    return sum.* + xval;
+}
+
+// CHECK: fn reduce_fn([[X:.*]]: f32, [[S:.*]]: *f32) f32 {
+// CHECK:     return [[S]].* + [[X]];
+// CHECK: }
+
+// CHECK: export fn test_map() f32 {
+// CHECK:     @map(reduce_fn, mem_dsd, &sum, &sum);
+// CHECK: }
+export fn test_map() f32 {
+    mem_dsd = @set_dsd_length(mem_dsd, 1);
+    var sum: f32 = @as(f32, 0);
+    @map(reduce_fn, mem_dsd, &sum, &sum);
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// tensor_access with pointer-to-array base
+// A single pointer to an array should be valid as a tensor_access base.
+// The pointer's comptime value (the address it points to) becomes the DSD's
+// base_address.
+// =============================================================================
+
+var backing: [4, 10]f32;
+const ptr: *[4, 10]f32 = &backing;
+
+// CHECK: var dsd_via_ptr: mem1d_dsd = @get_dsd(mem1d_dsd, .{ .base_address = &backing, .offset = 0, .stride = 1, .extent = 10 });
+var dsd_via_ptr = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{10} -> ptr[0, i] });
+
+// CHECK: export fn use_ptr_dsd() void {
+// CHECK:     dsd_via_ptr = @set_dsd_length(dsd_via_ptr, @as(u16, 5));
+// CHECK: }
+export fn use_ptr_dsd() void {
+    dsd_via_ptr = @set_dsd_length(dsd_via_ptr, 5);
+}
+
+// -----
+
+// =============================================================================
+// @__internal_promote_to_const_global - materialize comptime string as global
+// Creates a const [N]u8 global from a comptime_string and returns *const [N]u8.
+// =============================================================================
+
+// CHECK: const [[G1:.*]]: [5]u8 = [5]u8{104, 101, 108, 108, 111};
+// CHECK: export fn promote_basic() *const [5]u8 {
+// CHECK:     return &[[G1]];
+// CHECK: }
+export fn promote_basic() *const [5]u8 {
+    return @__internal_promote_to_const_global("hello");
+}
+
+// -----
+
+// CHECK: const [[G2:.*]]: [6]u8 = [6]u8{104, 101, 108, 108, 111, 0};
+// CHECK: fn promote_with_nul() *const [6]u8 {
+// CHECK:     return &[[G2]];
+// CHECK: }
+fn promote_with_nul(comptime s: comptime_string) *const [6]u8 {
+    return @__internal_promote_to_const_global(@strcat(s, "\x00"));
+}
+
+// CHECK: export fn test_promote_nul() *const [6]u8 {
+// CHECK:     return promote_with_nul();
+// CHECK: }
+export fn test_promote_nul() *const [6]u8 {
+    return promote_with_nul("hello");
+}
+
+// -----
+
+// CHECK: const [[G3:.*]]: [5]u8 = [5]u8{104, 101, 108, 108, 111};
+const buf = @__internal_promote_to_const_global("hello");
+
+// buf is a comptime-known pointer, so its value is inlined at use sites.
+// CHECK: export fn promote_global_use() *const [5]u8 {
+// CHECK:     return &[[G3]];
+// CHECK: }
+export fn promote_global_use() *const [5]u8 {
+    return buf;
+}

@@ -1,0 +1,409 @@
+// Coroutine smoke test: exercises @await, @await_parallel, suspend,
+// return values, parameters, loops, and nesting on a single PE.
+//
+// Each test prints markers to sim.log via <simprint>.
+// The companion run.py parses sim.log and verifies correctness.
+
+param memcpy_params;
+param STATE: local_task_id;
+param CLOBBER: local_task_id;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const prt = @import_module("<simprint>");
+
+// ===== Debug: dump frame words =====
+
+fn dump_frame(comptime label: comptime_string, frame_raw: [*]u8, n: u16) void {
+    const frame = @ptrcast([*]u16, frame_raw);
+    prt.print_string(label);
+    var i: u16 = 0;
+    while (i < n) : (i += 1) {
+        if (i > 0) prt.print_string(" ");
+        prt.print_u16_hex(frame[i]);
+    }
+    prt.print_string("\n");
+}
+
+// ===== Test 1: Simple @await (0 args, void return, no suspend) =====
+
+async fn simple_work() void {
+    prt.print_string("T1:ok\n");
+}
+
+// ===== Test 2: @await with return value (0 args) =====
+
+async fn ret_42() u16 {
+    return 42;
+}
+
+// ===== Test 3: @await with 1 parameter (+ suspend to test spill) =====
+
+async fn add_one(x: u16) u16 {
+    @activate(@current_task());
+    suspend;
+    return x + 1;
+}
+
+// ===== Test 3b: @await with 2 parameters (+ suspend) =====
+
+async fn add_two(a: u16, b: u16) u16 {
+    @activate(@current_task());
+    suspend;
+    return a + b;
+}
+
+// ===== Test 3c: @await with 3 parameters (+ suspend) =====
+
+async fn add_three(a: u16, b: u16, c: u16) u16 {
+    @activate(@current_task());
+    suspend;
+    return a + b + c;
+}
+
+// ===== Test 4: @await with one suspend =====
+
+async fn two_phases() void {
+    prt.print_string("T4:1\n");
+    @activate(@current_task());
+    suspend;
+    prt.print_string("T4:2\n");
+}
+
+// ===== Test 5: @await with multiple suspends =====
+
+async fn three_phases() void {
+    prt.print_string("T5:1\n");
+    @activate(@current_task());
+    suspend;
+    prt.print_string("T5:2\n");
+    @activate(@current_task());
+    suspend;
+    prt.print_string("T5:3\n");
+}
+
+// ===== Test 6: @await_parallel (no suspend in callees) =====
+
+async fn par_a() void {
+    prt.print_string("T6:A\n");
+    prt.print_string("T6:tid=");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+}
+
+async fn par_b() void {
+    prt.print_string("T6:B\n");
+    prt.print_string("T6:tid=");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+}
+
+// ===== Test 7: @await_parallel in a loop (state reset regression) =====
+
+var cnt_a: u16 = 0;
+var cnt_b: u16 = 0;
+
+async fn inc_a() void {
+    cnt_a += 1;
+}
+
+async fn inc_b() void {
+    cnt_b += 1;
+}
+
+// ===== Test 8: @await_parallel with suspend in both callees =====
+
+async fn sus_a() void {
+    prt.print_string("T8:A1\n");
+    @activate(@current_task());
+    suspend;
+    prt.print_string("T8:A2\n");
+}
+
+async fn sus_b() void {
+    prt.print_string("T8:B1\n");
+    @activate(@current_task());
+    suspend;
+    prt.print_string("T8:B2\n");
+}
+
+// ===== Test 9: Nested @await (outer calls @await(inner)) =====
+
+async fn inner() u16 {
+    return 7;
+}
+
+async fn nested_outer() u16 {
+    const x = @await(inner());
+    return x + 3;
+}
+
+// ===== Test 10: @await from within @await_parallel =====
+
+var result_10a: u16 = 0;
+var result_10b: u16 = 0;
+
+async fn await_in_par_a() void {
+    result_10a = @await(add_one(10));
+}
+
+async fn await_in_par_b() void {
+    result_10b = @await(add_two(3, 4));
+}
+
+// ===== Test 11: Nested @await_parallel =====
+// nested_par_outer itself calls @await_parallel internally.
+// This means 4 workers are needed at the outer site:
+//   footprint(nested_par_outer) = 1 + footprint(npo_a) + footprint(npo_b) = 3
+//   footprint(nested_par_leaf) = 1
+//   outer site sum = 3 + 1 = 4
+
+var cnt_11a: u16 = 0;
+var cnt_11b: u16 = 0;
+
+async fn npo_a() void {
+    cnt_11a += 1;
+}
+
+async fn npo_b() void {
+    cnt_11b += 1;
+}
+
+async fn nested_par_outer() void {
+    @await_parallel(npo_a(), npo_b());
+}
+
+async fn nested_par_leaf() void {
+    prt.print_string("T11:leaf\n");
+}
+
+// ===== Test 12: Offloaded @await with return value + task ID check =====
+
+async fn offload_add(x: u16) u16 {
+    prt.print_string("T12:tid=");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+    @activate(@current_task());
+    suspend;
+    return x + 10;
+}
+
+// ===== Test 13: Offloaded @await (void, multiple suspends) =====
+
+var cnt_13: u16 = 0;
+
+async fn offload_count() void {
+    cnt_13 += 1;
+    @activate(@current_task());
+    suspend;
+    cnt_13 += 1;
+    @activate(@current_task());
+    suspend;
+    cnt_13 += 1;
+}
+
+// ===== Test 14: Non-offloaded @await task ID check (for comparison) =====
+
+async fn inline_report_tid() void {
+    prt.print_string("T12:tid=");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+    @activate(@current_task());
+    suspend;
+}
+
+// ===== Register/flag clobber task =====
+// A plain hardware task that trashes as many registers and flags as possible,
+// then reactivates the suspended fiber task.  Used by Test 15 to verify that
+// the compiler correctly spills/restores state across suspend points.
+
+var resume_task_id: local_task_id;
+export var clobber_sink: u16 = 0;
+
+export var ca: u16 = 0xDEAD;
+export var cb: u16 = 0xBEEF;
+export var cc: u16 = 0xCAFE;
+export var cd: u16 = 0xF00D;
+export var ce: u16 = 0xBAAD;
+export var cf: u16 = 0xFACE;
+export var cg: u16 = 0x1234;
+export var ch: u16 = 0x5678;
+
+task clobber() void {
+    var a = ca;
+    var b = cb;
+    var c = cc;
+    var d = cd;
+    var e = ce;
+    var f = cf;
+    var g = cg;
+    var h = ch;
+
+    // Chain of operations to pressure the register allocator
+    a = a + b + c;
+    b = b + d + e;
+    c = c + f + a;
+    d = d + a + b;
+    e = e + b + c;
+    f = f + c + d;
+    g = g + d + e;
+    h = h + e + f;
+
+    // Comparisons to clobber flags
+    if (a > b) { c += 1; }
+    if (d < e) { f += 1; }
+    if (a == f) { b += 1; }
+    if (g > h) { a += 1; }
+
+    prt.print_string("T15:sink=");
+    prt.print_u16_decimal(clobber_sink);
+    prt.print_string("\n");
+    clobber_sink = a + b + c + d + e + f + g + h;
+    @activate(resume_task_id);
+}
+
+// ===== Test 15: Suspend inside a loop =====
+// Accumulates 0+1+2+3+4 = 10, suspending after each iteration.
+// Between each suspend/resume, the clobber task runs and trashes registers/flags.
+
+async export fn loop_suspend(n: u16) u16 {
+    resume_task_id = @current_task();
+    var acc: u16 = 0;
+    var i: u16 = 0;
+    while (i < n) : (i += 1) {
+        acc += i;
+        clobber_sink = 0;
+        @activate(CLOBBER);
+        suspend;
+        prt.print_string("T15:post_sink=");
+        prt.print_u16_decimal(clobber_sink);
+        prt.print_string("\n");
+    }
+    return acc;
+}
+
+// ===== Main test runner =====
+
+async task f_tests() void {
+    // Test 1: Simple @await (0 args, void, no suspend)
+    prt.print_string("T1:begin\n");
+    @await(simple_work());
+    prt.print_string("T1:done\n");
+
+    // Test 2: Return value (0 args)
+    prt.print_string("T2:begin\n");
+    const v2 = @await(ret_42());
+    prt.print_string("T2:");
+    prt.print_u16_decimal(v2);
+    prt.print_string("\n");
+
+    // Test 3: 1 param + suspend + return
+    prt.print_string("T3:begin\n");
+    const v3 = @await(add_one(99));
+    prt.print_string("T3:");
+    prt.print_u16_decimal(v3);
+    prt.print_string("\n");
+
+    // Test 3b: 2 params + suspend + return
+    prt.print_string("T3b:begin\n");
+    const v3b = @await(add_two(40, 2));
+    prt.print_string("T3b:");
+    prt.print_u16_decimal(v3b);
+    prt.print_string("\n");
+
+    // Test 3c: 3 params + suspend + return
+    prt.print_string("T3c:begin\n");
+    const v3c = @await(add_three(10, 20, 30));
+    prt.print_string("T3c:");
+    prt.print_u16_decimal(v3c);
+    prt.print_string("\n");
+
+    // Test 4: Suspend
+    prt.print_string("T4:begin\n");
+    @await(two_phases());
+    prt.print_string("T4:done\n");
+
+    // Test 5: Multiple suspends
+    prt.print_string("T5:begin\n");
+    @await(three_phases());
+    prt.print_string("T5:done\n");
+
+    // Test 6: Parallel (no suspend)
+    prt.print_string("T6:begin\n");
+    @await_parallel(par_a(), par_b());
+    prt.print_string("T6:done\n");
+
+    // Test 7: Parallel in loop — regression test for callee state reset.
+    // Without the fix, only the first iteration would run both callees;
+    // subsequent iterations would see stale DONE state and skip one.
+    prt.print_string("T7:begin\n");
+    var i: u16 = 0;
+    while (i < 5) : (i += 1) {
+        @await_parallel(inc_a(), inc_b());
+    }
+    prt.print_string("T7:a=");
+    prt.print_u16_decimal(cnt_a);
+    prt.print_string("\n");
+    prt.print_string("T7:b=");
+    prt.print_u16_decimal(cnt_b);
+    prt.print_string("\n");
+
+    // Test 8: Parallel with suspend in both callees
+    prt.print_string("T8:begin\n");
+    @await_parallel(sus_a(), sus_b());
+    prt.print_string("T8:done\n");
+
+    // Test 9: Nested @await
+    prt.print_string("T9:begin\n");
+    const v9 = @await(nested_outer());
+    prt.print_string("T9:");
+    prt.print_u16_decimal(v9);
+    prt.print_string("\n");
+
+    // Test 10: @await from within @await_parallel
+    prt.print_string("T10:begin\n");
+    @await_parallel(await_in_par_a(), await_in_par_b());
+    prt.print_string("T10:a=");
+    prt.print_u16_decimal(result_10a);
+    prt.print_string("\n");
+    prt.print_string("T10:b=");
+    prt.print_u16_decimal(result_10b);
+    prt.print_string("\n");
+
+    // Test 11: Nested @await_parallel
+    prt.print_string("T11:begin\n");
+    @await_parallel(nested_par_outer(), nested_par_leaf());
+    prt.print_string("T11:a=");
+    prt.print_u16_decimal(cnt_11a);
+    prt.print_string("\n");
+    prt.print_string("T11:b=");
+    prt.print_u16_decimal(cnt_11b);
+    prt.print_string("\n");
+
+    // Test 14: Non-offloaded @await should see caller's task ID (10).
+    prt.print_string("T12:begin\n");
+    @await(inline_report_tid());
+
+    // Test 15: Suspend inside a loop
+    prt.print_string("T15:begin\n");
+    const v15 = @await(loop_suspend(5));
+    prt.print_string("T15:");
+    prt.print_u16_decimal(v15);
+    prt.print_string("\n");
+
+    prt.print_string("PASS\n");
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_start() void {
+    @coro_runtime_init();
+    @activate(STATE);
+}
+
+comptime {
+    @bind_local_task(f_tests, STATE);
+    @bind_local_task(clobber, CLOBBER);
+}
+
+comptime {
+    @export_symbol(f_start);
+}

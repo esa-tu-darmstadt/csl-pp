@@ -1,0 +1,115 @@
+// stencil_3d_7pts: layout part.
+//
+// Import this module in the layout file and pass the result of
+// get_params(px, py) to the PE program of each PE, which imports the PE
+// part (pe.csl) with it:
+//
+//   const stencil = @import_module("stencil_3d_7pts/layout.csl", .{
+//     .width = width, .height = height,
+//   });
+//   ...
+//   @set_tile_code(px, py, "pe.csl", .{
+//     .stencil_params = stencil.get_params(px, py),
+//     ...
+//   });
+//
+// The module claims the eight colors on which neighboring PEs exchange
+// their boundary values: two per direction, which alternate from PE to PE
+// so that a PE never sends and receives on the same color.
+
+param width: i16;   // width of the rectangle
+param height: i16;  // height of the rectangle
+
+// region: claims
+const C0: color = @claim_color();
+const C1: color = @claim_color();
+const C2: color = @claim_color();
+const C3: color = @claim_color();
+const C4: color = @claim_color();
+const C5: color = @claim_color();
+const C6: color = @claim_color();
+const C7: color = @claim_color();
+// endregion
+
+// Parameters of the PE part.
+const Params = struct {
+    c_recv_west: color,
+    c_send_east: color,
+    c_recv_east: color,
+    c_send_west: color,
+    c_recv_south: color,
+    c_send_north: color,
+    c_recv_north: color,
+    c_send_south: color,
+    first_px: bool,
+    last_px: bool,
+    first_py: bool,
+    last_py: bool,
+};
+
+// Returns the parameters of the PE part for the PE at (px, py).
+fn get_params(px: i16, py: i16) Params {
+    const first_py: bool = (0 == py);
+    const last_py: bool = ((height - 1) == py);
+    const is_py_even: bool = (0 == (py % 2));
+
+    const first_px: bool = (0 == px);
+    const last_px: bool = ((width - 1) == px);
+    const is_px_even: bool = (0 == (px % 2));
+
+    // Eastward: C0 and C1 alternate along the row.
+    //         C0     C1     C0     C1     C0
+    // West P0 --> P1 --> P2 --> P3 --> P4 --> P5 East
+    var c_recv_west: color = C1;
+    var c_send_east: color = C0;
+    if (!is_px_even) {
+        c_recv_west = C0;
+        c_send_east = C1;
+    }
+
+    // Westward: C2 and C3.
+    //          C2     C3     C2     C3     C2
+    // West P0 <-- P1 <-- P2 <-- P3 <-- P4 <-- P5 East
+    var c_recv_east: color = C2;
+    var c_send_west: color = C3;
+    if (!is_px_even) {
+        c_recv_east = C3;
+        c_send_west = C2;
+    }
+
+    // Northward: C4 and C5 alternate along the column.
+    //           C4     C5     C4     C5     C4
+    // North P0 <-- P1 <-- P2 <-- P3 <-- P4 <-- P5 South
+    var c_recv_south: color = C4;
+    var c_send_north: color = C5;
+    if (!is_py_even) {
+        c_recv_south = C5;
+        c_send_north = C4;
+    }
+
+    // Southward: C6 and C7.
+    //           C6     C7     C6     C7     C6
+    // North P0 --> P1 --> P2 --> P3 --> P4 --> P5 South
+    var c_recv_north: color = C7;
+    var c_send_south: color = C6;
+    if (!is_py_even) {
+        c_recv_north = C6;
+        c_send_south = C7;
+    }
+
+    return Params {
+        .c_recv_west = c_recv_west,
+        .c_send_east = c_send_east,
+        .c_recv_east = c_recv_east,
+        .c_send_west = c_send_west,
+        .c_recv_south = c_recv_south,
+        .c_send_north = c_send_north,
+        .c_recv_north = c_recv_north,
+        .c_send_south = c_send_south,
+
+        .first_px = first_px,
+        .last_px = last_px,
+        .first_py = first_py,
+        .last_py = last_py,
+    };
+}

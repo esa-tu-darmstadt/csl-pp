@@ -1,0 +1,70 @@
+// Minimal fiber lowering test: async task + @await + suspend on a single PE.
+// Exercises: sequential @await (void + return value), suspend/resume.
+
+param memcpy_params;
+
+const STATE: local_task_id = @claim_local_task();
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const prt = @import_module("<simprint>");
+
+var result: u16 = 0;
+
+async fn add_one(x: u16) u16 {
+    prt.print_string("add_one: task id: ");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+    @activate(@current_task());
+    suspend;
+    prt.print_string("add_one resumed: task id: ");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+    return x + 1;
+}
+
+async fn simple_void() void {
+    result = 10;
+    prt.print_string("simple_void: task id: ");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+}
+
+async task f_main() void {
+    prt.print_string("START. f_main task id: ");
+    prt.print_u16_decimal(@get_int(@current_task()));
+    prt.print_string("\n");
+    // Test 1: Sequential @await (void, no suspend)
+    prt.print_string("T1:begin\n");
+    @await(simple_void());
+    prt.print_string("T1:");
+    prt.print_u16_decimal(result);
+    prt.print_string("\n");
+
+    // Test 2: Sequential @await (return value + suspend)
+    prt.print_string("T2:begin\n");
+    const v = @await(add_one(41));
+    prt.print_string("T2:");
+    prt.print_u16_decimal(v);
+    prt.print_string("\n");
+
+    prt.print_string("T3:begin\n");
+    @await_parallel(simple_void(), simple_void());
+    prt.print_string("T3:done\n");
+
+    prt.print_string("PASS\n");
+
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_start() void {
+    @coro_runtime_init();
+    @activate(STATE);
+}
+
+comptime {
+    @bind_local_task(f_main, STATE);
+}
+
+comptime {
+    @export_symbol(f_start);
+}

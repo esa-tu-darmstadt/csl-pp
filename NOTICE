@@ -1,0 +1,14 @@
+csl++
+
+Parts of csl++ are derived from the examples of the Cerebras SDK, which
+Cerebras Systems publishes at https://github.com/Cerebras/sdk-examples under
+the Apache License, Version 2.0:
+
+- libs/allreduce and libs/stencil_3d_7pts, from benchmarks/benchmark-libs,
+  rewritten for csl++;
+- test/Integration/coro-benchmarks/benchmark-libs-orig, a copy of
+  benchmarks/benchmark-libs;
+- the programs in test/Integration/non-coro-benchmarks and
+  test/Integration/coro-benchmarks that carry the name of an SDK benchmark,
+  modified for timing measurements and, in coro-benchmarks, rewritten with
+  the language extensions of csl++.

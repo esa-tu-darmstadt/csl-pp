@@ -1,0 +1,65 @@
+// RUN: csl-s2s %s --count-tasks=false --print-ir-after-all=all \
+// RUN:   --mlir-disable-threading 2>&1 | FileCheck %s
+//
+// An indirect call reachable from an async task needs no annotation: the
+// stack resolver charges it with every function it may call, i.e. every
+// function whose address is taken and whose type equals the call's type.
+// Functions that are only bound as tasks or exported do not have their
+// address taken.
+
+// CHECK-LABEL: IR Dump After FiberLoweringPass
+// CHECK:       typed_csl.func @helper(
+// CHECK-NOT:   typed_csl.func
+// CHECK:       } {csl.fiber.captured_sync_callees = ["leaf_a", "leaf_b"]}
+
+const STATE: local_task_id = @get_local_task_id(1);
+const PLAIN: local_task_id = @get_local_task_id(2);
+
+async task root() void {
+  helper(0);
+}
+
+fn helper(i: u16) void {
+  var fp: *const fn() void = leaf_a;
+  if (i == 1) {
+    fp = leaf_b;
+  }
+  fp();
+}
+
+// Address taken, matching type: possible callees.
+fn leaf_a() void {}
+fn leaf_b() void {
+  var x: [4]u32;
+  x[0] = 1;
+}
+
+// Address never taken: not a possible callee.
+fn leaf_c() void {}
+export fn use_leaf_c() void {
+  leaf_c();
+}
+
+// Address taken, different type: not a possible callee.
+fn other(x: u16) void {}
+const other_ptr: *const fn(u16) void = other;
+export fn use_other() void {
+  other_ptr(1);
+}
+
+// Only bound as a task: not a possible callee.
+task plain() void {}
+
+comptime {
+  @bind_local_task(root, STATE);
+  @bind_local_task(plain, PLAIN);
+}
+
+// Only exported: not a possible callee.
+fn fstart() void {
+  @coro_runtime_init();
+  @activate(STATE);
+}
+comptime {
+  @export_symbol(fstart);
+}

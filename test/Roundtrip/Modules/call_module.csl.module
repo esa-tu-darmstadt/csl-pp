@@ -1,0 +1,14 @@
+// Module for testing function calls
+
+fn add(a: i32, b: i32) i32 {
+  return a + b;
+}
+
+fn generic_mul(comptime T: type, a: T, b: T) T {
+  return a * b;
+}
+
+// Calls another function in the same module
+fn double_add(a: i32, b: i32) i32 {
+  return add(a, b) * 2;
+}

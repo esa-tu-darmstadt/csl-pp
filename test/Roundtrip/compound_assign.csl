@@ -1,0 +1,51 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Compound assignment operators in exported function
+// =============================================================================
+
+// CHECK: export fn test_compound_assign() void {
+// CHECK:     var x: i32 = @as(i32, 10);
+// CHECK:     var y: i32 = @as(i32, 5);
+// CHECK:     x += y;
+// CHECK:     x -= y;
+// CHECK:     x *= y;
+// CHECK:     x /= y;
+// CHECK:     x %= y;
+// CHECK:     x <<= @as(u32, 2);
+// CHECK:     x >>= @as(u32, 1);
+// CHECK:     x &= y;
+// CHECK:     x |= y;
+// CHECK:     x ^= y;
+// CHECK: }
+export fn test_compound_assign() void {
+    var x: i32 = 10;
+    var y: i32 = 5;
+    x += y;
+    x -= y;
+    x *= y;
+    x /= y;
+    x %= y;
+    x <<= 2;
+    x >>= 1;
+    x &= y;
+    x |= y;
+    x ^= y;
+}
+
+// -----
+
+// =============================================================================
+// Compound assignment on array elements (lvalue with multiple uses)
+// =============================================================================
+
+// CHECK: var arr: [2]u32 = [2]u32{0, 0};
+// CHECK: export fn test_compound_assign_array(param0: u32) void {
+// CHECK:     (arr)[@as(u16, 0)] += param0 * @as(u32, 2);
+// CHECK:     (arr)[@as(u16, 1)] -= param0;
+// CHECK: }
+var arr = @zeros([2]u32);
+export fn test_compound_assign_array(in_data: u32) void {
+    arr[0] += in_data * 2;
+    arr[1] -= in_data;
+}

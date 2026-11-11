@@ -1,0 +1,142 @@
+//===- CslFlagsFields.def - X-macro definitions for CslFlags fields -------===//
+//
+// Single source of truth for CslFlags fields. Each macro invocation defines
+// a flag that generates:
+//   - A public member in CslFlags
+//   - A cl::opt/cl::list in CslToolOptions
+//   - Copy logic in fromCommandLine()
+//   - Serialization in print()/parseFromString()
+//   - Comparison in operator==
+//
+// CSL_FLAG(Type, name, key, default, description)
+//   Type    - C++ type of the field
+//   name    - C++ member name (camelCase)
+//   key     - CLI option name and serialization key (kebab-case)
+//   default - Default value expression
+//   desc    - Description string
+//
+// CSL_FLAG_ENUM(Type, name, key, default, description, values...)
+//   Type    - C++ enum type
+//   name    - C++ member name (camelCase)
+//   key     - CLI option name and serialization key (kebab-case)
+//   default - Default value expression
+//   desc    - Description string
+//   ...     - CSL_ENUM_VAL(EnumVal, "cli-name", "description") entries.
+//             Each expansion site redefines CSL_ENUM_VAL to extract the
+//             needed representation (cl::OptionEnumValue, string mapping, etc.)
+//
+// CSL_FLAG_LIST(ElemType, name, key, description)
+//   ElemType - Element type for std::vector
+//   name     - C++ member name
+//   key      - CLI option name and serialization key
+//   desc     - Description string
+//
+// CSL_FLAG_DIAG(name, key, default, description)
+//   name    - C++ member name (camelCase)
+//   key     - CLI option name suffix (full CLI option is -W<key>)
+//   default - Default level as lowercase string: "off", "warn", or "error"
+//   desc    - What the diagnostic checks for
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef CSL_FLAG
+#define CSL_FLAG(Type, name, key, def, desc)
+#endif
+#ifndef CSL_ENUM_VAL
+#define CSL_ENUM_VAL(enumVal, cliName, cliDesc)
+#endif
+#ifndef CSL_FLAG_ENUM
+#define CSL_FLAG_ENUM(Type, name, key, def, desc, ...)
+#endif
+#ifndef CSL_FLAG_LIST
+#define CSL_FLAG_LIST(ElemType, name, key, desc)
+#endif
+#ifndef CSL_FLAG_DIAG
+#define CSL_FLAG_DIAG(name, key, def, desc)
+#endif
+
+// Scalar flags
+CSL_FLAG(Dimensions, rectangle, "rectangle", Dimensions{},
+         "Rectangle dimensions as width,height")
+CSL_FLAG(Dimensions, fabricDims, "fabric-dims", Dimensions{},
+         "Fabric dimensions as width,height")
+CSL_FLAG(Dimensions, fabricOffsets, "fabric-offsets", Dimensions{},
+         "Fabric offsets as x,y")
+CSL_FLAG(std::string, systemModuleSif, "system-module-sif", "",
+         "Path to .sif container for system modules")
+CSL_FLAG(bool, autoLinkname, "auto-linkname", false,
+         "Auto-attach linkname to module symbols")
+CSL_FLAG(bool, traceErrors, "trace-errors", false,
+         "Attach call stack to error diagnostics")
+CSL_FLAG(bool, verifyBetweenPasses, "verify-between-passes", true,
+         "Verify IR between passes")
+CSL_FLAG(bool, profilePasses, "profile-passes", false,
+         "Measure and print pass execution times")
+CSL_FLAG(unsigned, numThreads, "num-threads", 0,
+         "Number of threads for parallel execution (0 = auto-detect, 1 = "
+         "disable multithreading)")
+CSL_FLAG(unsigned, coroFrameSlotAlign, "coro-frame-slot-align", 2,
+         "Minimum alignment in bytes for coroutine frame slots "
+         "(1 = byte-addressed [*]u8, 2 = word-addressed [*]u16)")
+CSL_FLAG(bool, countTasks, "count-tasks", false,
+         "Run the static task-slot accounting pass and print a per-PE "
+         "summary (local/control/data counts) to stderr")
+
+// Enum flags
+CSL_FLAG_ENUM(TargetArch, targetArch, "arch", TargetArch::WSE2,
+              "Target architecture",
+              CSL_ENUM_VAL(TargetArch::WSE2, "wse2", "WSE2 architecture"),
+              CSL_ENUM_VAL(TargetArch::WSE3, "wse3", "WSE3 architecture"))
+
+CSL_FLAG_ENUM(Fp16Format, fp16Format, "fp16-format", Fp16Format::F16,
+              "FP16 format",
+              CSL_ENUM_VAL(Fp16Format::F16, "f16", "FP16 format"),
+              CSL_ENUM_VAL(Fp16Format::BF16, "bf16", "BF16 format"),
+              CSL_ENUM_VAL(Fp16Format::CB16, "cb16", "CB16 format"))
+
+CSL_FLAG_ENUM(PrintIRMode, printIRAfterAll, "print-ir-after-all",
+              PrintIRMode::Off, "Print IR after all passes",
+              CSL_ENUM_VAL(PrintIRMode::Off, "off", "Disabled (default)"),
+              CSL_ENUM_VAL(PrintIRMode::Layout, "layout", "Layout file only"),
+              CSL_ENUM_VAL(PrintIRMode::FirstPE, "first-pe", "First PE only"),
+              CSL_ENUM_VAL(PrintIRMode::AllPE, "all-pe", "All PE programs"),
+              CSL_ENUM_VAL(PrintIRMode::All, "all", "Layout + all PEs"))
+
+CSL_FLAG_ENUM(CoroInstrument, coroInstrument, "coro-instrument",
+              CoroInstrument::None,
+              "Profiling instrumentation for coroutine lowering (fiber only). "
+              "'runtime' keeps functions out of line; 'await-parallel' adds "
+              "backend-inlineable named debug scopes",
+              CSL_ENUM_VAL(CoroInstrument::None, "none",
+                           "No instrumentation (default)"),
+              CSL_ENUM_VAL(CoroInstrument::Runtime, "runtime",
+                           "Keep the runtime functions out of line so a "
+                           "profiler can attribute cycles to them"),
+              CSL_ENUM_VAL(CoroInstrument::AwaitParallel, "await-parallel",
+                           "Give each @await_parallel site an ordinary named "
+                           "function for DWARF inline attribution"),
+              CSL_ENUM_VAL(CoroInstrument::All, "all", "Both of the above"))
+
+CSL_FLAG_ENUM(CoroMode, coroMode, "coro-mode", CoroMode::Fiber,
+              "Coroutine lowering strategy",
+              CSL_ENUM_VAL(CoroMode::Fiber, "fiber",
+                           "Fiber-based stack switching (default)"),
+              CSL_ENUM_VAL(CoroMode::Trampoline, "trampoline",
+                           "Stackless state-machine trampolines"))
+
+// List flags
+CSL_FLAG_LIST(std::string, importPaths, "import-path",
+              "Module import search paths")
+CSL_FLAG_LIST(std::string, systemImportPaths, "system-import-path",
+              "System module search paths")
+
+// Diagnostic flags
+CSL_FLAG_DIAG(shadow, "shadow", "off", "variable shadowing")
+CSL_FLAG_DIAG(unresolvedSystemSymbol, "unresolved-system-symbol", "off",
+              "unresolved but unused identifiers in system modules")
+
+#undef CSL_FLAG
+#undef CSL_ENUM_VAL
+#undef CSL_FLAG_ENUM
+#undef CSL_FLAG_LIST
+#undef CSL_FLAG_DIAG

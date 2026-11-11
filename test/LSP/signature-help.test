@@ -1,0 +1,76 @@
+// RUN: sed "s|TEST_DIR|%/p|g" %s | csl-lsp-server -lit-test | FileCheck -strict-whitespace %s
+// Test: signature help for direct calls and module member calls.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"csl","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"file://TEST_DIR/Inputs/main_sighelp.csl",
+  "languageId":"csl",
+  "version":1,
+  "text":"const mod = @import_module(\"module_a.csl\");\n\nfn local_fn(x: u32, y: u32) u32 {\n    return x + y;\n}\n\nfn entry() void {\n    const a = local_fn(1, 2);\n    const b = mod.add(1, 2);\n}\n"
+}}}
+// -----
+// Signature help inside direct call "local_fn(" at first arg (line 7, char 23).
+{"jsonrpc":"2.0","id":1,"method":"textDocument/signatureHelp","params":{
+  "textDocument":{"uri":"file://TEST_DIR/Inputs/main_sighelp.csl"},
+  "position":{"line":7,"character":23}
+}}
+//      CHECK:  "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "activeParameter": 0,
+// CHECK-NEXT:    "activeSignature": 0,
+// CHECK-NEXT:    "signatures": [
+// CHECK-NEXT:      {
+// CHECK-NEXT:        "label": "local_fn(x: u32, y: u32) u32",
+// CHECK-NEXT:        "parameters": [
+// CHECK-NEXT:          {
+// CHECK-NEXT:            "label": [
+// CHECK-NEXT:              9,
+// CHECK-NEXT:              15
+// CHECK-NEXT:            ]
+// CHECK-NEXT:          },
+// CHECK-NEXT:          {
+// CHECK-NEXT:            "label": [
+// CHECK-NEXT:              17,
+// CHECK-NEXT:              23
+// CHECK-NEXT:            ]
+// CHECK-NEXT:          }
+// CHECK-NEXT:        ]
+// CHECK-NEXT:      }
+// CHECK-NEXT:    ]
+// CHECK-NEXT:  }
+// -----
+// Signature help inside module call "mod.add(" at first arg (line 8, char 22).
+{"jsonrpc":"2.0","id":2,"method":"textDocument/signatureHelp","params":{
+  "textDocument":{"uri":"file://TEST_DIR/Inputs/main_sighelp.csl"},
+  "position":{"line":8,"character":22}
+}}
+//      CHECK:  "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": {
+// CHECK-NEXT:    "activeParameter": 0,
+// CHECK-NEXT:    "activeSignature": 0,
+// CHECK-NEXT:    "signatures": [
+// CHECK-NEXT:      {
+// CHECK-NEXT:        "label": "add(x: u32, y: u32) u32",
+// CHECK-NEXT:        "parameters": [
+// CHECK-NEXT:          {
+// CHECK-NEXT:            "label": [
+// CHECK-NEXT:              4,
+// CHECK-NEXT:              10
+// CHECK-NEXT:            ]
+// CHECK-NEXT:          },
+// CHECK-NEXT:          {
+// CHECK-NEXT:            "label": [
+// CHECK-NEXT:              12,
+// CHECK-NEXT:              18
+// CHECK-NEXT:            ]
+// CHECK-NEXT:          }
+// CHECK-NEXT:        ]
+// CHECK-NEXT:      }
+// CHECK-NEXT:    ]
+// CHECK-NEXT:  }
+// -----
+{"jsonrpc":"2.0","id":100,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

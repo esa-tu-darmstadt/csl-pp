@@ -1,0 +1,77 @@
+---
+title: 3. Resources
+description: The libraries claim their colors, queues and task IDs; the program passes none.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+The stencil routes eight colors, the reduction one. Each library also needs input and output queues on every PE, and the "hybrid" stencil needs three task IDs. This step shows who decides which ones.
+
+## The CSL version
+
+In CSL, the program decides. The layout file of the SDK benchmark opens with the map of all colors in the program and passes them to the libraries, and the PE program passes the queues and task IDs:
+
+```csl
+// color map: memcpy + allreduce + stencil
+//
+// memcpy uses colors 20-23. c8 is an internal color of allreduce.
+// The stencil uses c0..c7 ...
+param C0_ID: i16;
+param C1_ID: i16;
+// ...
+const C0: color = @get_color(C0_ID);
+```
+
+```csl
+const reduce_mod = @import_module("allreduce/pe.csl", .{
+    // ...
+    .queues = [1]u16{2},
+    .dest_dsr_ids = [1]u16{1},
+    // ...
+});
+const stencil_mod = @import_module("stencil_3d_7pts/pe.csl", .{
+    // ...
+    .input_queues = [4]u16{4, 5, 6, 7},
+    .output_queues = if (@is_arch("wse3")) [4]u16{4, 5, 6, 7} else [1]u16{3},
+    // ...
+});
+```
+
+Every number must be free on every PE, and must stay free when a library is added or the memcpy configuration changes.
+
+## The csl++ version
+
+In csl++, the library decides. The layout part of `allreduce` claims its color where it is routed:
+
+<Example file="csl-libs/allreduce/layout.csl" region="claim" />
+
+and the stencil claims its eight:
+
+<Example file="csl-libs/stencil_3d_7pts/layout.csl" region="claims" />
+
+A claim at compile time returns a resource that no other claim of the program returns and that memcpy does not use. A claim in the layout file or a module it imports reserves the resource in every PE program. The PE parts claim their queues the same way:
+
+<Example file="csl-libs/allreduce/pe.csl" region="claims" />
+
+The program imports the libraries without resource parameters, as in [step 1](../1-solver/#the-csl-version), and claims the task ID of its own task with `@claim_local_task()`. Which numbers the claims return is decided by `csl-pp`; the generated CSL shows them as `@get_color(n)` and `@get_input_queue(n)`.
+
+## Two instances
+
+Because each import of a library makes its own claims, a program can import a library twice. A second reduction library for a second vector is one more
+import in the layout file and one in the PE program:
+
+```csl
+const reduce_a = @import_module("allreduce/layout.csl", .{ .width = width, .height = height });
+const reduce_b = @import_module("allreduce/layout.csl", .{ .width = width, .height = height });
+```
+
+Each instance routes a color of its own and claims queues of its own. With fixed numbers in the library, the second import would use the same ones as the first.
+
+<Aside>
+DSRs are the one kind of resource the program still assigns, with the `dsr_id` and `dsr_ids` parameters: csl++ has no claim builtin for them yet. Two instances whose operations can run at the same time need different DSR sets.
+</Aside>
+
+The claim builtins are also available to the program itself, at compile time and at runtime; see [Claims](../../language/resources/). The [last step](../4-run/) compiles and runs the program.

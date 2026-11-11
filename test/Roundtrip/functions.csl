@@ -1,0 +1,505 @@
+// RUN: csl-s2s %s --split-input-file -verify-diagnostics | FileCheck %s
+
+// =============================================================================
+// Extern function declaration (no body)
+// =============================================================================
+
+// CHECK: extern fn external_func(param0: i32) void;
+extern fn external_func(x: i32) void;
+
+// CHECK: export fn call_extern(param0: i32) void {
+// CHECK:     external_func(param0);
+// CHECK: }
+export fn call_extern(x: i32) void {
+    external_func(x);
+}
+
+// -----
+
+// =============================================================================
+// Extern function with return type
+// =============================================================================
+
+// CHECK: extern fn get_value() i32;
+extern fn get_value() i32;
+
+// CHECK: export fn use_extern_value() i32 {
+// CHECK:     return get_value();
+// CHECK: }
+export fn use_extern_value() i32 {
+    return get_value();
+}
+
+// -----
+
+// =============================================================================
+// Export compatibility: struct return type is NOT export compatible
+// =============================================================================
+
+const Point = struct { x: i32, y: i32 };
+
+// expected-error @+1 {{is not export compatible}}
+export fn returns_struct(x: i32, y: i32) Point {
+    return Point { .x = x, .y = y };
+}
+
+// -----
+
+// =============================================================================
+// Export compatibility: struct parameter is NOT export compatible
+// =============================================================================
+
+const Point = struct { x: i32, y: i32 };
+
+// expected-error @+1 {{is not export compatible}}
+export fn takes_struct(p: Point) i32 {
+    return p.x + p.y;
+}
+
+// -----
+
+// =============================================================================
+// Export compatibility: extern with struct is NOT export compatible
+// (Call the extern to trigger instantiation)
+// =============================================================================
+
+const Data = struct { value: i32 };
+
+// expected-error @+1 {{is not export compatible}}
+extern fn extern_with_struct(d: Data) void;
+
+export fn call_extern_with_struct() void {
+    extern_with_struct(Data { .value = 42 });
+}
+
+// -----
+
+// =============================================================================
+// Non-export function with struct is OK (instantiated via call)
+// =============================================================================
+
+const Point = struct { x: i32, y: i32 };
+
+// CHECK: fn helper_with_struct(param0: [[Point:.*]]) i32 {
+fn helper_with_struct(p: Point) i32 {
+    return p.x + p.y;
+}
+
+// CHECK: export fn test_non_export_struct() i32 {
+export fn test_non_export_struct() i32 {
+    return helper_with_struct(Point { .x = 1, .y = 2 });
+}
+
+// -----
+
+// =============================================================================
+// Inline function with comptime-known args: folds to constant
+// =============================================================================
+
+inline fn add_inline(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+// CHECK: export fn use_inline() i32 {
+// CHECK:     return @as(i32, 3);
+// CHECK: }
+export fn use_inline() i32 {
+    return add_inline(1, 2);
+}
+
+// -----
+
+// =============================================================================
+// Inline function with runtime args: expands and inlines
+// =============================================================================
+
+inline fn add_rt(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+// CHECK: export fn use_inline_rt(param0: i32, param1: i32) i32 {
+// CHECK:     const [[A:__inline_add_rt_[0-9]+_a]]: i32 = param0;
+// CHECK:     const [[B:__inline_add_rt_[0-9]+_b]]: i32 = param1;
+// CHECK:     return [[A]] + [[B]];
+// CHECK: }
+export fn use_inline_rt(x: i32, y: i32) i32 {
+    return add_rt(x, y);
+}
+
+// -----
+
+// =============================================================================
+// Void inline function: body inlined directly
+// =============================================================================
+
+var global: i32 = 0;
+
+inline fn set_global(val: i32) void {
+    global = val;
+}
+
+// CHECK: var global: i32 = @as(i32, 0);
+// CHECK: export fn use_void_inline(param0: i32) void {
+// CHECK:     const [[VAL:__inline_set_global_[0-9]+_val]]: i32 = param0;
+// CHECK:     global = [[VAL]];
+// CHECK: }
+export fn use_void_inline(x: i32) void {
+    set_global(x);
+}
+
+// -----
+
+// =============================================================================
+// Inline function with multiple returns: labeled block preserved
+// =============================================================================
+
+inline fn max_inline(a: i32, b: i32) i32 {
+    if (a > b) return a;
+    return b;
+}
+
+// CHECK: export fn use_max(param0: i32, param1: i32) i32 {
+// CHECK:     return [[LBL:__inline_max_inline_[0-9]+]]: {
+// CHECK:         const [[MAXA:__inline_max_inline_[0-9]+_a]]: i32 = param0;
+// CHECK:         const [[MAXB:__inline_max_inline_[0-9]+_b]]: i32 = param1;
+// CHECK:         if ([[MAXA]] > [[MAXB]]) {
+// CHECK:             break :[[LBL]] [[MAXA]];
+// CHECK:         }
+// CHECK:         break :[[LBL]] [[MAXB]];
+// CHECK:     };
+// CHECK: }
+export fn use_max(x: i32, y: i32) i32 {
+    return max_inline(x, y);
+}
+
+// -----
+
+// =============================================================================
+// Separate expansions of the same inline function use distinct proxy names
+// =============================================================================
+
+inline fn negate_inline(x: i32) i32 {
+    return -x;
+}
+
+// CHECK: export fn use_inline_twice(param0: i32) i32 {
+// CHECK:     const [[FIRST:__inline_negate_inline_[0-9]+_x]]: i32 = param0;
+// CHECK:     const [[SECOND:__inline_negate_inline_[0-9]+_x]]: i32 = param0;
+// CHECK-NOT: const [[FIRST]]
+// CHECK:     return -[[FIRST]] + -[[SECOND]];
+// CHECK: }
+export fn use_inline_twice(x: i32) i32 {
+    return negate_inline(x) + negate_inline(x);
+}
+
+// -----
+
+// =============================================================================
+// Inline function with comptime-only type param (no comptime keyword)
+// Called from a runtime context: the instantiated function body is not in
+// comptime context, so the call to the inline function hits the runtime
+// path where inline expansion must fire before comptime-only type validation.
+// =============================================================================
+
+inline fn is_fp16(T: type) bool {
+    return @is_same_type(T, f16);
+}
+
+fn is_float(comptime T: type) bool {
+    return is_fp16(T) or @is_same_type(T, f32);
+}
+
+// CHECK: fn is_float{{.*}}() bool {
+// CHECK:     return true;
+// CHECK: }
+// CHECK: export fn test_inline_type_param() bool {
+// CHECK:     return is_float{{.*}}();
+// CHECK: }
+export fn test_inline_type_param() bool {
+    return is_float(f32);
+}
+
+// -----
+
+// =============================================================================
+// Module with export function: all symbols get prefixed, linkname stays as attr
+// =============================================================================
+
+const mod = @import_module("Modules/export_module.csl.module");
+
+// All symbols get module prefix, export keeps its linkname
+// CHECK: fn mod__private_helper(param0: i32) i32 {
+// CHECK: export fn mod__exported_func(param0: i32) linkname("exported_func") i32 {
+
+export fn test_module_export() i32 {
+    return mod.exported_func(5);
+}
+
+// -----
+
+// =============================================================================
+// Module with extern function: all symbols get prefixed, linkname stays as attr
+// =============================================================================
+
+const ext_mod = @import_module("Modules/extern_module.csl.module");
+
+// All symbols get module prefix, extern keeps its linkname
+// CHECK: extern fn ext_mod__external_runtime_func(param0: i32) linkname("external_runtime_func") i32;
+// CHECK: fn ext_mod__use_external(param0: i32) i32 {
+
+export fn test_module_extern() i32 {
+    return ext_mod.use_external(10);
+}
+
+// -----
+
+// =============================================================================
+// Module with linkname: uses linkname as final name
+// =============================================================================
+
+const ln_mod = @import_module("Modules/linkname_module.csl.module");
+
+// All private symbols get module prefix, linkname is emitter metadata
+// CHECK: var ln_mod__my_var: i32 = @as(i32, 0);
+// CHECK: fn ln_mod__internal_impl(param0: i32) i32 {
+// CHECK: fn ln_mod__custom_named_func(param0: i32) linkname("my_custom_link_name") i32 {
+
+export fn test_module_linkname() i32 {
+    return ln_mod.custom_named_func(42);
+}
+
+// -----
+
+// =============================================================================
+// Top-level function with string literal linkname
+// =============================================================================
+
+// CHECK: fn my_linked_func(param0: i32) linkname("my_linked_func") i32 {
+fn my_linked_func(x: i32) linkname("my_linked_func") i32 {
+    return x;
+}
+
+// CHECK: export fn test_top_level_linkname() i32 {
+export fn test_top_level_linkname() i32 {
+    return my_linked_func(5);
+}
+
+// -----
+
+// =============================================================================
+// Top-level extern function with linkname
+// =============================================================================
+
+// CHECK: extern fn ext_with_linkname(param0: i32) linkname("custom_ext") i32;
+extern fn ext_with_linkname(x: i32) linkname("custom_ext") i32;
+
+// CHECK: export fn test_extern_linkname() i32 {
+export fn test_extern_linkname() i32 {
+    return ext_with_linkname(10);
+}
+
+// -----
+
+// =============================================================================
+// Expression-based linkname with comptime const variable
+// =============================================================================
+
+const my_name: comptime_string = "computed_linkname";
+
+// CHECK: fn expr_linkname_func(param0: i32) linkname("computed_linkname") i32 {
+fn expr_linkname_func(x: i32) linkname(my_name) i32 {
+    return x + 1;
+}
+
+// CHECK: export fn test_expr_linkname() i32 {
+export fn test_expr_linkname() i32 {
+    return expr_linkname_func(3);
+}
+
+// -----
+
+// =============================================================================
+// Indirect call through function pointer (void return)
+// =============================================================================
+
+fn void_target() void {}
+
+// CHECK: fn void_target() void {
+// CHECK: }
+// CHECK: export fn test_indirect_void_call() void {
+// CHECK:     var fptr: *const fn() void = &void_target;
+// CHECK:     fptr();
+// CHECK: }
+export fn test_indirect_void_call() void {
+    var fptr: *const fn() void = &void_target;
+    fptr();
+}
+
+// -----
+
+// =============================================================================
+// Address-of function parameter: params are const lvalues, so &param works
+// =============================================================================
+
+fn takes_ptr(p: *const i32) i32 {
+    return p.*;
+}
+
+// CHECK: fn takes_ptr(param0: *const i32) i32 {
+// CHECK:     return param0.*;
+// CHECK: }
+// CHECK: export fn test_address_of_param(param0: i32) i32 {
+// CHECK:     return takes_ptr(&param0);
+// CHECK: }
+export fn test_address_of_param(x: i32) i32 {
+    return takes_ptr(&x);
+}
+
+// -----
+
+// =============================================================================
+// Void function without explicit return: implicit void return inserted
+// =============================================================================
+
+var g: i32 = 0;
+
+// CHECK: export fn void_no_return(param0: i32) void {
+// CHECK:     g = param0;
+// CHECK:     return;
+// CHECK: }
+export fn void_no_return(x: i32) void {
+    g = x;
+}
+
+// -----
+
+// =============================================================================
+// Void function where all if-branches return: unreachable inserted (emits nothing)
+// =============================================================================
+
+// CHECK: export fn void_all_branches_return(param0: i32) void {
+// CHECK-NEXT:     if (param0 > @as(i32, 0)) {
+// CHECK-NEXT:         return;
+// CHECK-NEXT:     } else {
+// CHECK-NEXT:         return;
+// CHECK-NEXT:     }
+// CHECK-NEXT:     // unreachable
+// CHECK-NEXT: }
+export fn void_all_branches_return(x: i32) void {
+    if (x > 0) {
+        return;
+    } else {
+        return;
+    }
+}
+
+// -----
+
+// =============================================================================
+// Non-void function where all paths return: unreachable inserted (emits nothing)
+// =============================================================================
+
+// CHECK: export fn non_void_all_paths_return(param0: i32) i32 {
+// CHECK-NEXT:     if (param0 > @as(i32, 0)) {
+// CHECK-NEXT:         return @as(i32, 1);
+// CHECK-NEXT:     } else {
+// CHECK-NEXT:         return @as(i32, 0);
+// CHECK-NEXT:     }
+// CHECK-NEXT:     // unreachable
+// CHECK-NEXT: }
+export fn non_void_all_paths_return(x: i32) i32 {
+    if (x > 0) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+// -----
+
+// =============================================================================
+// Non-void function that falls through without returning: error
+// =============================================================================
+
+// expected-error @+1 {{non-void function does not return a value on all paths}}
+export fn missing_return(x: i32) i32 {
+    if (x > 0) {
+        return 1;
+    }
+}
+
+// -----
+
+// =============================================================================
+// Noinline function
+// =============================================================================
+
+// CHECK: noinline fn noinline_helper() void {
+// CHECK:     return;
+// CHECK: }
+noinline fn noinline_helper() void {
+}
+
+// CHECK: export fn call_noinline() void {
+// CHECK:     noinline_helper();
+// CHECK: }
+export fn call_noinline() void {
+    noinline_helper();
+}
+
+// -----
+
+// =============================================================================
+// Noinline + export is not allowed
+// =============================================================================
+
+// expected-error @+1 {{exported functions cannot be 'noinline'}}
+export noinline fn bad_export_noinline() void {
+}
+
+// -----
+
+// =============================================================================
+// Noinline + extern is not allowed
+// =============================================================================
+
+// expected-error @+1 {{extern functions cannot be 'noinline'}}
+extern noinline fn bad_extern_noinline() void;
+
+// -----
+
+// =============================================================================
+// Noinline + inline is not allowed
+// =============================================================================
+
+// expected-error @+1 {{function cannot be both 'inline' and 'noinline'}}
+noinline inline fn bad_both() void {
+}
+
+export fn use_bad_both() void {
+    bad_both();
+}
+
+// -----
+
+// =============================================================================
+// Noinline + task is not allowed
+// =============================================================================
+
+// expected-error @+1 {{tasks cannot have 'noinline' modifier}}
+noinline task bad_noinline_task() void {
+}
+
+// -----
+
+// =============================================================================
+// Symbol collision: export function in module collides with top-level
+// =============================================================================
+
+const collision_mod = @import_module("Modules/collision_export.csl.module");
+
+// Top-level function with same name as module's export -> collision
+// expected-error @+1 {{symbol name collision: 'exported_func'}}
+export fn exported_func(x: i32) i32 {
+    return x;
+}

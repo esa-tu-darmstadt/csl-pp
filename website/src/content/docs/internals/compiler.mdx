@@ -1,0 +1,144 @@
+---
+title: The compiler
+description: How csl-pp is built, from the parser through its two intermediate representations to the vanilla CSL it emits, and where a new language feature goes.
+sidebar:
+  order: 1
+---
+
+import PassPipeline from '../../../components/PassPipeline.astro';
+
+`csl-pp` is a source-to-source compiler built on [MLIR](https://mlir.llvm.org). It reads csl++, that is CSL with the [extensions](../../language/overview/), and writes vanilla CSL for `cslc`. In between, the program passes through two MLIR dialects of its own: ParsedCSL, which is close to the source, and TypedCSL, which is statically typed. The frontend that connects them is unconventional, and the first sections explain why CSL needs it to be. The sections after that follow the program through the compiler.
+
+<PassPipeline />
+
+## CSL
+
+CSL is inspired by Zig. Types are first-class values that exist at compile time: a function can take a type as a parameter, return one, store one in a constant, or compute one from the type of another argument. A generic function is an ordinary function with comptime parameters, instantiated for every combination of comptime arguments it is called with. A branch on a comptime value decides which code exists at all, and an `@import_module` with a parameter struct is an instantiation of a whole file.
+
+```csl
+fn element_type(comptime wide: bool) type {
+  return if (wide) f32 else f16;
+}
+
+fn scale(comptime wide: bool, x: *[N]element_type(wide), factor: element_type(wide)) void { ... }
+```
+
+The consequence for a statically-typed compiler is that CSL has no type system that could be evaluated in isolation. The type of a value is the result of a compile-time computation, and that computation can depend on any other compile-time computation in the program: the parameters of the tile, the fields of an imported module, the result of a builtin. **Type inference is therefore compile-time evaluation of the whole program**, including the instantiation of generic functions, a model of the semantics of every builtin, and the reachability of code.
+
+## Frontend architecture
+
+A conventional programming language frontend parses into a syntax tree, resolves names and types on the tree, and generates a typed IR from it in one step.
+
+We choose a more experimental frontend design in which the program is lowered gradually from an AST-like representation to the statically typed IR. The parser emits ParsedCSL, a syntax tree in SSA form that carries no static information beyond the syntax: no value has a type, no name is resolved, no coercion is inserted, and whether an expression denotes a location or a value is not yet known. A sequence of passes then refines it. Each pass removes exactly one kind of implicitness and leaves the IR well-formed, so that it can be specified, tested and debugged in isolation, and the IR before and after it differs in one precise way. The last step converts the result into TypedCSL, on which the transformations that implement the language extensions work.
+
+## Parser
+
+The parser is a hand-written recursive-descent parser with Pratt-style precedence climbing for expressions. It is error-resilient in the style of rust-analyzer: when a token does not match, it reports a diagnostic, synchronizes on a set of follow tokens and continues, so that one mistake produces one message and the rest of the file is still analyzed. This matters most for the [language server](../../tools/vscode/): while the user types, the file is incomplete almost all the time, and the server must still parse it and analyze what is there to report diagnostics and offer completion.
+
+The parser emits MLIR directly, without a syntax tree of its own. For this function
+
+```csl
+fn scale(x: f32) f32 {
+  var y: f32 = x * 2.0;
+  return y + 1.0;
+}
+```
+
+it produces
+
+```mlir
+parsed_csl.generic_func @scale {
+  // The signature region computes the type of the function.
+  %0 = parsed_csl.builtin_type f32
+  %1 = parsed_csl.builtin_type f32
+  %2 = parsed_csl.func_type(%0) -> (%1)
+  parsed_csl.yield %2
+} {
+^bb0(%arg0: !parsed_csl.unresolved):
+  // The body region holds the statements of the function, with one block
+  // argument per parameter.
+  %0 = parsed_csl.builtin_type f32
+  %1 = parsed_csl.read %arg0
+  %2 = parsed_csl.constant #csl.comptime_float<2.0> : !csl.comptime_float
+  %3 = parsed_csl.binary mul, %1, %2
+  %4 = parsed_csl.var "y" dynamicType(%0) init(%3)
+  %5 = parsed_csl.read %4
+  %6 = parsed_csl.constant #csl.comptime_float<1.0> : !csl.comptime_float
+  %7 = parsed_csl.binary add, %5, %6
+  parsed_csl.return %7
+}
+```
+
+Every value has the placeholder type `unresolved`. The type `f32` is a value, produced by an operation and passed as an operand to the variable declaration; the literals are comptime floats, not yet coerced to `f32`; `read` marks where the source reads a location, without knowing whether the location is a variable or something else; and the function carries a second region that computes its signature. `csl-s2s` in the repository prints this form of a file with `--emit-after-parsing`.
+
+### Generic function signatures
+
+In CSL, any parameter type and the return type of a function can be computed from the comptime values and the argument types that a caller supplies:
+
+```csl
+fn foo(comptime T: type, a: T, b: anytype, c: bar(T, @type_of(b))) baz(@type_of(c)) { ... }
+```
+
+Such a signature cannot be written down as a type; it is a function of the call. ParsedCSL therefore represents every function as one operation with two regions: the body, and a signature region that computes the function type. For a non-generic function, the signature region takes no arguments and yields the declared signature, as in the example above. For a generic function, the parser generates the region from the parameter list, with one block argument per comptime parameter and per `anytype` parameter's type:
+
+```csl
+// What the parser generates for the signature of foo, as pseudocode.
+fn foo_signature(T: type, b_type: type) type {
+  const a_type = T;
+  const c_type = bar(T, b_type);
+  const ret_type = baz(c_type);
+  return fn(T, a_type, b_type, c_type) ret_type;
+}
+```
+
+At a call site, the comptime evaluator runs the signature region with the call's comptime arguments and argument types, and instantiates the body for the function type that comes out. Every distinct result is a separate instance; the generic function itself never reaches TypedCSL.
+
+## Comptime evaluation
+
+The evaluator is an interpreter over ParsedCSL with a semantic model of every statement, expression and builtin. For each operation, it produces a possible diagnostic, the type or the compile-time value of the result, and a description of how control leaves the operation, from which it learns which code is unreachable and what type a function returns. It instantiates generic functions as described above, evaluates imported modules with their parameters, and models what every builtin returns. When the whole compilation unit has been evaluated, the pass rewrites the IR: compile-time values become constants, every operation carries its inferred type, unreachable code is removed, and no generic function remains.
+
+Most errors of a program are found here, at the source location that causes them. Because the evaluator resolves imported modules, parameters and generics before anything is emitted, `csl-pp` reports them before `cslc` runs, and `cslc` only ever sees programs that `csl-pp` has accepted.
+
+## Lowering to TypedCSL
+
+With the types and values known, three passes make explicit what the source leaves implicit:
+
+1. **Read resolution** turns the reads of variables into explicit loads, where the source reads them. Afterwards, every place that uses a location as a value says so.
+2. **Module inlining** flattens the imported modules into the compilation unit, renaming their symbols to `module__name`.
+3. **Cast normalization** makes every implicit coercion an explicit cast, folds casts of constants, and rejects casts that would lose information.
+
+A final dialect conversion produces TypedCSL, where every value has a concrete type, lvalues and rvalues are distinct, every cast is explicit, and comptime constructs are gone. The function from above becomes
+
+```mlir
+typed_csl.func @scale(%arg0: f32) -> f32 {
+  %1 = typed_csl.constant 1.000000e+00 : f32
+  %2 = typed_csl.constant 2.000000e+00 : f32
+  %3 = typed_csl.load from %arg0 : !csl.lvalue<const f32>
+  %4 = typed_csl.binary mul, %3, %2 : (f32, f32) -> f32
+  %5 = typed_csl.var "y" init(%4) : !csl.lvalue<mutable f32>
+  %6 = typed_csl.load from %5 : !csl.lvalue<mutable f32>
+  %7 = typed_csl.binary add, %6, %1 : (f32, f32) -> f32
+  typed_csl.return %7 : f32
+}
+```
+
+The signature is a type of the operation, the literals have become `f32` constants, the reads have become loads from lvalues that record whether the location is mutable, and every operation states the types it works on. `csl-s2s --emit-mlir` prints this form.
+
+## Transformations
+
+The language extensions live here, as passes on TypedCSL:
+
+- **Async lowering** turns async functions and tasks into ordinary functions on stacks of their own and inserts the runtime that suspends and resumes them. [Stackful coroutines in CSL](../coroutines/) describes it.
+- **Claims and runtime builtins** are resolved. Compile-time claims have already become constants during comptime evaluation; runtime claims, releases, `@count_free` and runtime task binding become calls to functions of a small allocator that the pass adds to the program, together with the bitmaps of the resources that compile-time claims and fixed IDs occupy.
+- **Tail recursion to loops** rewrites a self tail call into a loop before the async lowering, so that the stack sizing sees no recursion for it.
+- **Layout loop rolling** compacts the unrolled `@set_tile_code` and `@set_color_config` calls of the layout file back into loops over rectangles of tiles with the same arguments. Without it, a layout for a million PEs would be a million calls.
+
+## Tile programs
+
+A layout file names a PE program and a parameter struct for every tile. The pipeline runs once on the layout file, with the `--params` of the command line, and then once per distinct pair of PE program and parameter struct that the evaluated `@set_tile_code` calls name, with the struct as comptime constants. Tiles with the same program and parameters share one compilation; these compilations run in parallel. Each becomes one CSL file whose name carries a hash of the parameters, and the emitted layout file refers to these files.
+
+## Emission
+
+The emitter decides for every SSA value whether to print it inline as a subexpression or as a named temporary: a value with one use is inlined unless that would move a side effect past another, since CSL evaluates arguments left to right; values with several uses, and values whose order matters, become `const` temporaries. Module members keep their flattened names, so a function `spmv` of a module imported as `stencil` appears as `stencil__spmv`.
+
+For programs with async tasks, `cslc` then runs twice: the first run reports the stack frame sizes that the sizing of the coroutine stacks needs, the second compiles the final program. [csl-pp](../../tools/csl-pp/#stack-sizes) describes this from the user's side.

@@ -1,0 +1,63 @@
+// Resource allocation test: exercises @claim_* and @release_* builtins
+// at both comptime and runtime on a single PE.
+//
+// Prints markers to sim.log via <simprint>.
+// The companion run.py parses sim.log and verifies correctness.
+
+param memcpy_params;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+const prt = @import_module("<simprint>");
+
+// ===== Comptime claims =====
+// Resolved at compile time to concrete resource IDs.
+// The runtime bitmaps are patched so these IDs are not re-allocated.
+
+const CT_COLOR = @claim_color();
+const CT_TASK = @claim_local_task();
+const CT_IQ = @claim_input_queue();
+const CT_OQ = @claim_output_queue();
+const CT_CTRL = @claim_control_task();
+
+fn f_start() void {
+    // Print comptime-allocated resource IDs.
+    prt.print_string("CT_COLOR=");
+    prt.print_u16_decimal(@get_int(CT_COLOR));
+    prt.print_string("\n");
+
+    prt.print_string("CT_TASK=");
+    prt.print_u16_decimal(@get_int(CT_TASK));
+    prt.print_string("\n");
+
+    prt.print_string("CT_IQ=");
+    prt.print_u16_decimal(@get_int(CT_IQ));
+    prt.print_string("\n");
+
+    prt.print_string("CT_OQ=");
+    prt.print_u16_decimal(@get_int(CT_OQ));
+    prt.print_string("\n");
+
+    prt.print_string("CT_CTRL=");
+    prt.print_u16_decimal(@get_int(CT_CTRL));
+    prt.print_string("\n");
+
+    // Runtime claim: should skip comptime-claimed IDs.
+    const rt_color = @claim_color();
+    prt.print_string("RT_COLOR=");
+    prt.print_u16_decimal(@get_int(rt_color));
+    prt.print_string("\n");
+
+    // Runtime release + re-claim: should get same ID back.
+    @release_color(rt_color);
+    const rt_color2 = @claim_color();
+    prt.print_string("RT_COLOR2=");
+    prt.print_u16_decimal(@get_int(rt_color2));
+    prt.print_string("\n");
+
+    prt.print_string("PASS\n");
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @export_symbol(f_start);
+}

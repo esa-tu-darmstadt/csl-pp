@@ -1,0 +1,374 @@
+// RUN: csl-s2s %s --split-input-file | FileCheck %s
+
+// =============================================================================
+// Named struct definition and usage
+// =============================================================================
+
+const Point = struct {
+    x: i32,
+    y: i32,
+};
+
+// CHECK: const [[Point:.*]] = struct { x: i32, y: i32 };
+
+// CHECK: fn create_point([[param0:.*]]: i32, [[param1:.*]]: i32) [[Point]] {
+// CHECK:     return [[Point]] { .x = [[param0]], .y = [[param1]] };
+// CHECK: }
+fn create_point(x: i32, y: i32) Point {
+    return Point { .x = x, .y = y };
+}
+
+// CHECK: fn point_sum([[param0:.*]]: [[Point]]) i32 {
+// CHECK:     return [[param0]].x + [[param0]].y;
+// CHECK: }
+fn point_sum(p: Point) i32 {
+    return p.x + p.y;
+}
+
+// Helper to instantiate test functions (struct types not export-compatible)
+export fn test_point() i32 {
+    return point_sum(create_point(1, 2));
+}
+
+// -----
+
+// =============================================================================
+// Nested named structs
+// =============================================================================
+
+const Inner = struct {
+    value: i32,
+};
+
+const Outer = struct {
+    inner: Inner,
+    count: i32,
+};
+
+// CHECK: const [[Inner:.*]] = struct { value: i32 };
+// CHECK: const [[Outer:.*]] = struct { inner: [[Inner]], count: i32 };
+
+// CHECK: fn nested_access([[param0:.*]]: [[Outer]]) i32 {
+// CHECK:     return [[param0]].inner.value + [[param0]].count;
+// CHECK: }
+fn nested_access(o: Outer) i32 {
+    return o.inner.value + o.count;
+}
+
+// CHECK: export fn test_nested() i32 {
+export fn test_nested() i32 {
+    return nested_access(Outer { .inner = Inner { .value = 1 }, .count = 2 });
+}
+
+// -----
+
+// =============================================================================
+// Struct field modification
+// =============================================================================
+
+const MutablePoint = struct {
+    x: i32,
+    y: i32,
+};
+
+// CHECK: const [[MutablePoint:.*]] = struct { x: i32, y: i32 };
+
+// CHECK: fn modify_point([[param0:.*]]: [[MutablePoint]]) [[MutablePoint]] {
+// CHECK:     var [[var0:.*]]: [[MutablePoint]] = [[param0]];
+// CHECK:     [[var0]].x *= @as(i32, 2);
+// CHECK:     return [[var0]];
+// CHECK: }
+fn modify_point(p: MutablePoint) MutablePoint {
+    var result: MutablePoint = p;
+    result.x = result.x * 2;
+    return result;
+}
+
+// CHECK: export fn test_modify() i32 {
+export fn test_modify() i32 {
+    const result = modify_point(MutablePoint { .x = 5, .y = 10 });
+    return result.x;
+}
+
+// -----
+
+// =============================================================================
+// Struct with different field types
+// =============================================================================
+
+const Mixed = struct {
+    int_field: i32,
+    bool_field: bool,
+    float_field: f32,
+};
+
+// CHECK: const [[Mixed:.*]] = struct { int_field: i32, bool_field: bool, float_field: f32 };
+
+// CHECK: fn get_int([[param0:.*]]: [[Mixed]]) i32 {
+// CHECK:     return [[param0]].int_field;
+// CHECK: }
+fn get_int(m: Mixed) i32 {
+    return m.int_field;
+}
+
+// CHECK: fn get_bool([[param0:.*]]: [[Mixed]]) bool {
+// CHECK:     return [[param0]].bool_field;
+// CHECK: }
+fn get_bool(m: Mixed) bool {
+    return m.bool_field;
+}
+
+// CHECK: export fn test_mixed() i32 {
+export fn test_mixed() i32 {
+    const m = Mixed { .int_field = 42, .bool_field = true, .float_field = 3.14 };
+    if (get_bool(m)) {
+        return get_int(m);
+    }
+    return 0;
+}
+
+// -----
+
+// =============================================================================
+// Multiple structs with same structure are distinct (nominal typing)
+// =============================================================================
+
+const Vec2 = struct {
+    x: i32,
+    y: i32,
+};
+
+const Size = struct {
+    x: i32,
+    y: i32,
+};
+
+// Both structs have the same fields but should be distinct types
+// CHECK: const [[Vec2:.*]] = struct { x: i32, y: i32 };
+// CHECK: const [[Size:.*]] = struct { x: i32, y: i32 };
+
+// CHECK: fn use_vec([[param0:.*]]: [[Vec2]]) i32 {
+// CHECK:     return [[param0]].x;
+// CHECK: }
+fn use_vec(v: Vec2) i32 {
+    return v.x;
+}
+
+// CHECK: fn use_size([[param0:.*]]: [[Size]]) i32 {
+// CHECK:     return [[param0]].x;
+// CHECK: }
+fn use_size(s: Size) i32 {
+    return s.x;
+}
+
+// CHECK: export fn test_nominal() i32 {
+export fn test_nominal() i32 {
+    return use_vec(Vec2 { .x = 1, .y = 2 }) + use_size(Size { .x = 3, .y = 4 });
+}
+
+// -----
+
+// =============================================================================
+// Struct containing pointer
+// =============================================================================
+
+const WithPtr = struct {
+    data: *i32,
+    len: i32,
+};
+
+// CHECK: const [[WithPtr:.*]] = struct { data: *i32, len: i32 };
+
+// CHECK: fn get_len([[param0:.*]]: [[WithPtr]]) i32 {
+// CHECK:     return [[param0]].len;
+// CHECK: }
+fn get_len(w: WithPtr) i32 {
+    return w.len;
+}
+
+// CHECK: export fn test_with_ptr() i32 {
+export fn test_with_ptr() i32 {
+    var x: i32 = 42;
+    return get_len(WithPtr { .data = &x, .len = 1 });
+}
+
+// -----
+
+// =============================================================================
+// Struct containing array
+// =============================================================================
+
+const WithArray = struct {
+    values: [4]i32,
+    count: i32,
+};
+
+// CHECK: const [[WithArray:.*]] = struct { values: [4]i32, count: i32 };
+
+// CHECK: fn get_count([[param0:.*]]: [[WithArray]]) i32 {
+// CHECK:     return [[param0]].count;
+// CHECK: }
+fn get_count(w: WithArray) i32 {
+    return w.count;
+}
+
+// CHECK: export fn test_with_array() i32 {
+export fn test_with_array() i32 {
+    return get_count(WithArray { .values = [4]i32{ 1, 2, 3, 4 }, .count = 4 });
+}
+
+// -----
+
+// =============================================================================
+// Global variable with named struct value (StructValueAttr)
+// =============================================================================
+
+const Point = struct {
+    x: i32,
+    y: i32,
+};
+
+var origin: Point = Point { .x = 0, .y = 0 };
+
+// CHECK: const [[Point:.*]] = struct { x: i32, y: i32 };
+// CHECK: var origin: [[Point]] = [[Point]] { .x = 0, .y = 0 };
+
+// CHECK: export fn use_origin() i32 {
+// CHECK:     return origin.x + origin.y;
+// CHECK: }
+export fn use_origin() i32 {
+    return origin.x + origin.y;
+}
+
+// -----
+
+// =============================================================================
+// Nested struct value in global (StructValueAttr with nested types)
+// =============================================================================
+
+const Inner = struct {
+    val: i32,
+};
+
+const Outer = struct {
+    inner: Inner,
+};
+
+var nested: Outer = Outer { .inner = Inner { .val = 42 } };
+
+// CHECK: const [[Inner:.*]] = struct { val: i32 };
+// CHECK: const [[Outer:.*]] = struct { inner: [[Inner]] };
+// CHECK: var nested: [[Outer]] = [[Outer]] { .inner = [[Inner]] { .val = 42 } };
+
+// CHECK: export fn use_nested() i32 {
+// CHECK:     return nested.inner.val;
+// CHECK: }
+export fn use_nested() i32 {
+    return nested.inner.val;
+}
+
+// -----
+
+// =============================================================================
+// Anonymous tuple type via @type_of (tests that type alias is emitted correctly)
+// =============================================================================
+
+// The type alias TupleType gets inlined during comptime, so the emitted code
+// must use @type_of pattern to represent the anonymous tuple type.
+
+const TupleType = @type_of(.{ @as(u16, 0), @as(u16, 0) });
+
+// CHECK: fn returns_tuple() @type_of(.{ @as(u16, 0), @as(u16, 0) }) {
+// CHECK:     return .{ 10, 20 };
+// CHECK: }
+fn returns_tuple() TupleType {
+    return .{ @as(u16, 10), @as(u16, 20) };
+}
+
+// CHECK: export fn test_tuple_return() u16 {
+export fn test_tuple_return() u16 {
+    const t = returns_tuple();
+    return t[0] + t[1];
+}
+
+// -----
+
+// =============================================================================
+// Anonymous named-field struct types receive generated declarations
+// =============================================================================
+
+const AnonStructType = @type_of(.{ .x = @as(i32, 0), .y = @as(f32, 0.0) });
+
+// CHECK: const [[ANON_TYPE:__struct_[0-9]+]] = struct { x: i32, y: f32 };
+// CHECK: fn returns_anon_struct() [[ANON_TYPE]] {
+// CHECK:     return .{ .x = 42, .y = 3.14{{.*}} };
+// CHECK: }
+fn returns_anon_struct() AnonStructType {
+    return .{ .x = @as(i32, 42), .y = @as(f32, 3.14) };
+}
+
+// CHECK: export fn test_anon_struct_return() i32 {
+export fn test_anon_struct_return() i32 {
+    const s = returns_anon_struct();
+    return s.x;
+}
+
+// -----
+
+// =============================================================================
+// Nested anonymous struct type (tests recursion)
+// =============================================================================
+
+const NestedType = @type_of(.{ .inner = .{ @as(i32, 0), @as(i32, 0) }, .flag = @as(bool, false) });
+
+// CHECK: const [[NESTED_TYPE:__struct_[0-9]+]] = struct { inner: @type_of(.{ @as(i32, 0), @as(i32, 0) }), flag: bool };
+// CHECK: fn returns_nested_anon() [[NESTED_TYPE]] {
+// CHECK:     return .{ .inner = .{ 1, 2 }, .flag = true };
+// CHECK: }
+fn returns_nested_anon() NestedType {
+    return .{ .inner = .{ @as(i32, 1), @as(i32, 2) }, .flag = true };
+}
+
+// CHECK: export fn test_nested_anon() i32 {
+export fn test_nested_anon() i32 {
+    const s = returns_nested_anon();
+    return s.inner[0];
+}
+
+// -----
+
+// =============================================================================
+// Generic named structs get one declaration per concrete instantiation
+// =============================================================================
+
+fn Box(comptime T: type) type {
+    return struct {
+        value: T,
+    };
+}
+
+const F32Box = Box(f32);
+const I16Box = Box(i16);
+
+// CHECK-DAG: const [[BOX_F32:__struct_[0-9]+]] = struct { value: f32 };
+// CHECK-DAG: const [[BOX_I16:__struct_[0-9]+]] = struct { value: i16 };
+
+var f32_box: F32Box = F32Box { .value = 1.0 };
+var i16_box: I16Box = I16Box { .value = 2 };
+
+// CHECK: var f32_box: [[BOX_F32]] = [[BOX_F32]] { .value = 1.0{{.*}} };
+// CHECK: var i16_box: [[BOX_I16]] = [[BOX_I16]] { .value = 2 };
+
+// CHECK: export fn read_f32_box() f32 {
+// CHECK:     return f32_box.value;
+// CHECK: }
+export fn read_f32_box() f32 {
+    return f32_box.value;
+}
+
+// CHECK: export fn read_i16_box() i16 {
+// CHECK:     return i16_box.value;
+// CHECK: }
+export fn read_i16_box() i16 {
+    return i16_box.value;
+}

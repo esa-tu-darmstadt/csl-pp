@@ -1,0 +1,91 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false \
+// RUN:   | FileCheck %s
+//
+// The workers of @await_parallel claim local tasks at runtime.  Tasks bound
+// at comptime are not available to them, and an empty task bound to the
+// entry after a bound task keeps cslc from placing that task's body into an
+// entry a worker may claim.  The compiler warns unless the remaining entries
+// provably suffice.
+
+// =============================================================================
+// Bound tasks are reserved, and the entries after them are fenced.
+// =============================================================================
+
+// Entries 0 and 1 are bound; 20-23, 27 and 28 are reserved for memcpy, and
+// 26 is claimed at comptime.
+// CHECK: var __alloc_runtime__task_entry_free_lo: u16 = @as(u16, 65532);
+// CHECK: var __alloc_runtime__task_entry_free_hi: u16 = @as(u16, 783);
+// CHECK: task __task_fence_2() void {
+// CHECK: @bind_local_task(__task_fence_2, @get_local_task_id(2));
+
+const STATE: local_task_id = @get_local_task_id(1);
+const OTHER: local_task_id = @get_local_task_id(0);
+const CLAIMED: local_task_id = @claim_local_task();
+
+task other_task() void {}
+task claimed_task() void {}
+async fn a() void {}
+async fn b() void {}
+async task root() void {
+  @await_parallel(a(), b());
+}
+
+comptime {
+  @bind_local_task(root, STATE);
+  @bind_local_task(other_task, OTHER);
+  @bind_local_task(claimed_task, CLAIMED);
+}
+fn fstart() void { @coro_runtime_init(); @activate(STATE); }
+comptime { @export_symbol(fstart); }
+
+// -----
+
+// =============================================================================
+// More workers than free entries: five callees of five callees each.
+// =============================================================================
+
+const STATE: local_task_id = @get_local_task_id(1);
+
+async fn leaf() void {}
+
+async fn mid() void {
+  // expected-warning@+3 {{cannot prove that enough local tasks are free for the workers of @await_parallel: up to 29 workers may be active at the same time, but only 22 local task entries are left after the tasks bound or claimed at comptime; if they run out at runtime, the PE halts}}
+  // expected-note@+2 {{the count is an upper bound: it assumes that all callees of every @await_parallel are still running at the same time, although a worker returns its task as soon as its callee finishes, and that every indirect call calls its most demanding possible callee}}
+  // expected-note@+1 {{to stay within the free entries, run fewer callees of @await_parallel at the same time, or bind or claim fewer tasks}}
+  @await_parallel(leaf(), leaf(), leaf(), leaf(), leaf(), leaf());
+}
+
+// expected-note@+1 {{async task 'root' may need up to 29 workers}}
+async task root() void {
+  @await_parallel(mid(), mid(), mid(), mid(), mid());
+}
+
+comptime { @bind_local_task(root, STATE); }
+fn fstart() void { @coro_runtime_init(); @activate(STATE); }
+comptime { @export_symbol(fstart); }
+
+// -----
+
+// =============================================================================
+// A task claimed at runtime by user code makes the count uncheckable, which
+// is only remarked.
+// =============================================================================
+
+const STATE: local_task_id = @get_local_task_id(1);
+
+async fn leaf() void {}
+
+async task root() void {
+  // expected-remark@+1 {{cannot check whether enough local tasks are free for the workers of @await_parallel, because the program also claims tasks at runtime (up to 1 worker may be active at the same time); if they run out at runtime, the PE halts}}
+  @await_parallel(leaf(), leaf());
+}
+
+var extra: local_task_id = @get_local_task_id(0);
+fn use_claim() void {
+  // expected-note@+1 {{task claimed at runtime here}}
+  extra = @claim_local_task();
+}
+
+comptime { @bind_local_task(root, STATE); @export_symbol(use_claim); }
+fn fstart() void { @coro_runtime_init(); @activate(STATE); }
+comptime { @export_symbol(fstart); }

@@ -1,0 +1,157 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Error: Export function declaration without body
+// =============================================================================
+
+// expected-error @+1 {{exported functions must have a body}}
+export fn export_fn_without_body() void;
+
+// -----
+
+// =============================================================================
+// Error: Export generic function
+// =============================================================================
+
+// expected-error @+1 {{exported functions cannot be generic}}
+export fn generic_export(arg : anytype) void {
+}
+
+// -----
+
+// =============================================================================
+// Error: comptime-only type parameter without comptime keyword
+// =============================================================================
+
+fn is_i32(T: type) bool {
+  return @is_same_type(T, i32);
+}
+
+export fn call_implicit_type() bool {
+  // expected-error @+1 {{function parameter type is not valid at runtime: 'type'}}
+  return is_i32(i32);
+}
+
+// -----
+
+// =============================================================================
+// OK: comptime-only type without comptime keyword in comptime context
+// =============================================================================
+
+fn is_i32_comptime(T: type) bool {
+  return @is_same_type(T, i32);
+}
+
+comptime {
+  @comptime_assert(is_i32_comptime(i32));
+}
+
+// -----
+
+// =============================================================================
+// OK: comptime-only type without comptime keyword, called from comptime fn
+// =============================================================================
+
+fn is_float_helper(T: type) bool {
+  return @is_same_type(T, f32);
+}
+
+fn check_float(comptime T: type) bool {
+  return is_float_helper(T);
+}
+
+comptime {
+  @comptime_assert(check_float(f32));
+}
+
+// -----
+
+// =============================================================================
+// Return value is implicitly cast to a declared struct type
+// =============================================================================
+
+const ReturnedPair = struct {
+  x: i32,
+  y: i32,
+};
+
+fn returns_named_struct() ReturnedPair {
+  return ReturnedPair { .x = 42, .y = 99 };
+}
+
+comptime {
+  const pair = returns_named_struct();
+  @comptime_assert(@is_same_type(@type_of(pair), ReturnedPair),
+    "return value should have the declared struct type");
+  // expected-remark @+1 {{42}}
+  @comptime_print(pair.x);
+  // expected-remark @+1 {{99}}
+  @comptime_print(pair.y);
+}
+
+// -----
+
+// =============================================================================
+// Comptime call to inline function evaluates at comptime (no inlining)
+// =============================================================================
+
+inline fn ct_add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+comptime {
+    const result = ct_add(1, 2);
+    // expected-remark @+1 {{3}}
+    @comptime_print(result);
+    // expected-remark @+1 {{i32}}
+    @comptime_print(@type_of(result));
+}
+
+// -----
+
+// =============================================================================
+// Builtins with OurComptimeSideEffects should implicitly make their
+// arguments comptime. @comptime_assert(isF32(T)) should work even outside
+// a comptime block because the arguments are wrapped in comptime context.
+// =============================================================================
+
+fn isF32(T: type) bool {
+  return @is_same_type(T, f32);
+}
+
+fn someTest(someArg: anytype) void {
+  const T = @type_of(someArg);
+  @comptime_assert(isF32(T));
+}
+
+export fn call_someTest() void {
+  var x: f32 = 1.0;
+  someTest(x);
+}
+
+// -----
+
+// =============================================================================
+// Inline function expansion casts runtime args to declared param types
+// =============================================================================
+
+inline fn wrap(x: u16) type {
+    return @type_of(x);
+}
+
+export fn test_inline_arg_cast() void {
+    const T = wrap(10);
+    // expected-remark @+1 {{u16}}
+    @comptime_print(T);
+}
+
+// -----
+
+// =============================================================================
+// Error: Cannot assign to function parameter (params are const)
+// =============================================================================
+
+export fn assign_to_param(x: i32) void {
+    // expected-error @+1 {{cannot assign to const lvalue}}
+    x = 5;
+}

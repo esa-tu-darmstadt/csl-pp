@@ -1,0 +1,151 @@
+// stencil_3d_7pts: PE part.
+//
+// Multiplies a vector by the matrix of a 7-point stencil on a 3D grid. The
+// grid is distributed so that each PE holds a column of n points in z; the
+// x and y neighbors of a point are on the neighboring PEs. A product
+// exchanges the column with the four neighbors in blocks of BLOCK_SIZE
+// points and accumulates the stencil in y:
+//
+//   y[k] = c_west   * x_west[k]  + c_east  * x_east[k]
+//        + c_south  * x_south[k] + c_north * x_north[k]
+//        + c_bottom * x[k-1]     + c_top   * x[k+1]
+//        + c_center * x[k]
+//
+// with x[-1] = x[n] = 0. The coefficients can differ per PE, which allows
+// boundary conditions to be folded into them.
+//
+// Async function:
+//   spmv(n, coeff, x, y)   Computes y = A x for the local column x[0..n),
+//                          with the coefficients coeff[0..7) in the order
+//                          west, east, south, north, bottom, top, center.
+//                          n must be at least 2.
+//
+// It is called with @await from an async function or async task:
+//
+//   const stencil = @import_module("stencil_3d_7pts/pe.csl", .{
+//     .stencil_params = stencil_params,  // from the layout part's get_params
+//     .BLOCK_SIZE = 2,
+//     .output_ut_id = 7,                 // WSE-3 only, see below
+//     .dsr_ids = [2]u16{2, 3},
+//   });
+//   @await(stencil.spmv(n, &coeff, &x, &y));
+//
+// Two implementations are available; `impl` selects one:
+//
+//   "async" (default)  The sends to the four neighbors and the receives
+//                      from them are two async functions that run at the
+//                      same time with @await_parallel, one block after
+//                      the other. The library claims no task IDs; the
+//                      worker task of @await_parallel is claimed while a
+//                      product runs. Each block costs a few suspends.
+//
+//   "hybrid"           The sends and receives are tasks that continue
+//                      each other, as in the library of the Cerebras SDK,
+//                      and spmv suspends once per product until they are
+//                      done. The library claims three local task IDs at
+//                      compile time. This is the faster implementation
+//                      when the column is short.
+//
+// Resources: the layout part claims the eight colors; this part claims
+// four input queues and, on WSE-3, four output queues, or one output queue
+// on WSE-2. It uses the DSRs dest and src1 with the two indices in
+// dsr_ids, and src0 with the first index, while a product runs. The
+// "hybrid" implementation also claims three local task IDs.
+//
+// Requirements:
+//   - The program calls @coro_runtime_init() before its first async task
+//     is activated, as for every program with async tasks.
+//   - At most one product of an instance runs at a time.
+//   - n is at least 2; the z part of the stencil uses DSDs of length n-1.
+//
+// How it works
+//
+// A product runs in blocks of BLOCK_SIZE points of the column. For each
+// block, the PE sends the block to its east, west, north and south
+// neighbors, one after the other, and receives the corresponding blocks
+// of the neighbors into four buffers of BLOCK_SIZE points. Sending and
+// receiving must happen at the same time, because every neighbor is
+// sending too. When both are done, the x-y part of the stencil is added
+// to y for the block from the four buffers. After the last block, the z
+// part is added for the whole column from x itself, with x[-1] = x[n] = 0.
+// PEs on the edge of the rectangle skip the directions without a
+// neighbor; their buffers stay zero.
+//
+// With n = 3 and BLOCK_SIZE = 2, for example, the first block has 2
+// points and the second 1; the DSD lengths are reduced for the last block.
+//
+// Each direction has two colors, which alternate from PE to PE (see
+// layout.csl), so that a PE never sends and receives on the same color.
+// Each color is routed between the two neighbors only.
+//
+// The two implementations differ in how the exchange of a block is
+// driven; the DSD operations, routes and queues are the same. Both derive
+// from the stencil_3d_7pts library of the Cerebras SDK benchmarks.
+
+// The struct that the layout part's get_params(px, py) returns.
+param stencil_params;
+
+// Number of points exchanged with a neighbor at a time.
+param BLOCK_SIZE: i16;
+
+// WSE-3 only: the microthread that the sends use. Unused on WSE-2.
+//
+// On WSE-3, an asynchronous operation runs on the microthread with the
+// number of its queue unless .ut_id names another one, and two operations
+// that run at the same time must not share a microthread. The receives of
+// this library use the microthreads of their input queues, so output_ut_id
+// must differ from the numbers of those queues and of the input queues of
+// every other module whose receives can run at the same time. The claimed
+// queue numbers are visible in the generated CSL; with memcpy on queues 0
+// and 1, 7 is free unless a program claims six or more input queues.
+param output_ut_id = {};
+
+// Indices of the two DSR sets that the sends and the receives use.
+param dsr_ids: [2]u16 = [2]u16{2, 3};
+
+// The implementation, "async" or "hybrid"; see above.
+param impl: comptime_string = "async";
+
+fn get_stencil_module() comptime_string {
+  @comptime_assert(impl == "async" or impl == "hybrid",
+                   "stencil_3d_7pts: impl must be \"async\" or \"hybrid\"");
+
+  if (impl == "hybrid") {
+    if (@is_arch("wse3")) {
+      return "wse3/pe_hybrid.csl";
+    } else {
+      return "wse2/pe_hybrid.csl";
+    }
+  } else {
+    if (@is_arch("wse3")) {
+      return "wse3/pe.csl";
+    } else {
+      return "wse2/pe.csl";
+    }
+  }
+}
+
+const stencil_mod = @import_module(get_stencil_module(), .{
+  .c_recv_west = stencil_params.c_recv_west,
+  .c_send_east = stencil_params.c_send_east,
+  .c_recv_east = stencil_params.c_recv_east,
+  .c_send_west = stencil_params.c_send_west,
+
+  .c_recv_south = stencil_params.c_recv_south,
+  .c_send_north = stencil_params.c_send_north,
+  .c_recv_north = stencil_params.c_recv_north,
+  .c_send_south = stencil_params.c_send_south,
+
+  .first_px = stencil_params.first_px,
+  .last_px = stencil_params.last_px,
+  .first_py = stencil_params.first_py,
+  .last_py = stencil_params.last_py,
+
+  .output_ut_id = output_ut_id,
+
+  .BLOCK_SIZE = BLOCK_SIZE,
+
+  .dsr_ids = dsr_ids,
+});
+
+const spmv = stencil_mod.spmv;

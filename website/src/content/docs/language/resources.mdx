@@ -1,0 +1,82 @@
+---
+title: Resource allocation
+description: Claiming, releasing and counting colors, task IDs and queues.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+The claim builtins return a color, task ID or queue that no other claim of the program returns, and that is not used by the memcpy library or by a task bound with a fixed ID before the claim.
+
+| Builtin | Result |
+| --- | --- |
+| `@claim_color()` | `color` |
+| `@claim_local_task()` | `local_task_id` |
+| `@claim_data_task()` | `data_task_id` |
+| `@claim_control_task()` | `control_task_id` |
+| `@claim_input_queue()` | `input_queue` |
+| `@claim_output_queue()` | `output_queue` |
+
+Which ID a claim returns is not specified.
+
+## Claims at compile time
+
+A claim in a comptime context is made at compile time, and its result is a constant: the initializer of a global, a `comptime` block, or a function called from one. Such a claim has no runtime cost and cannot be released.
+
+<Example file="language/resources/src/pe.csl" region="comptime" />
+
+A claim in a layout file or a module that it imports reserves the resource in every PE program as well. A PE program that claims resources gets other ones. A library typically claims its colors in its layout part and passes them to its PE part as parameters; see [step 3 of the tutorial](../../tutorial/3-resources/).
+
+## Claims at runtime
+
+A claim in runtime code is made when it runs. It never returns a resource that is claimed at compile time, bound with a fixed ID, or used by the memcpy library:
+
+<Example file="language/resources/src/pe.csl" region="runtime" />
+
+A runtime claim calls a small allocator that `csl-pp` adds to the program. If no resource of the kind is free, the PE halts.
+
+## Releasing resources
+
+`@release_color(id)`, `@release_local_task(id)`, `@release_data_task(id)`, `@release_control_task(id)`, `@release_input_queue(id)` and `@release_output_queue(id)` return a resource that was claimed at runtime. A later claim can return it again.
+
+- A release in a comptime context is an error.
+- A release at runtime is not checked. Releasing a resource that was claimed at compile time, bound with a fixed ID, or not claimed at all makes it available to the next claim. Only release what the same code claimed at runtime and no longer uses.
+
+## Counting free resources
+
+```csl
+@count_free(T) u16
+```
+
+Returns the number of free resources of the kind `T`, which must be one of the types `color`, `local_task_id`, `data_task_id`, `control_task_id`, `input_queue` or `output_queue`. At runtime, it is the number of resources that a claim could return at that moment. In a comptime context, it is the number that the compile-time claims evaluated so far have left.
+
+`@await_parallel` claims its worker tasks at runtime, so `@count_free(local_task_id)` tells whether a parallel call can get them; see [Parallel await](../calls/#worker-tasks).
+
+## Available resources
+
+The pools from which the claims draw depend on the architecture. The memcpy library uses some of each kind, whether or not the program imports it; these are never returned.
+
+| Resource | WSE-2 | WSE-3 | Used by memcpy |
+| --- | --- | --- | --- |
+| Colors | 0–23 | 0–23 | 20–23 |
+| Local tasks | 0–28 | 8–28 | 21, 27, 28 (and 30, which is never claimed) |
+| Data tasks | 0–23 | input queues 0–7 | see colors / input queues |
+| Control tasks | 31–62 | 31–62 | 33–37 |
+| Input queues | 0–7 | 0–7 | 0, 1 |
+| Output queues | 0–5 | 0–7 | 0, 1 |
+
+On WSE-2, colors, local tasks 0–23 and data tasks are the same task table entries: claiming a color also takes the local task and data task with the same number. On WSE-3, a data task belongs to an input queue, so claiming a data task also takes the input queue.
+
+A task bound with a fixed ID, for example `@bind_local_task(t, @get_local_task_id(9))`, is reserved when the bind is evaluated. Claims evaluated after the bind do not return its ID; a claim evaluated before it can.
+
+<Aside type="caution">
+Claim all task IDs, or bind tasks with fixed IDs before any claim of the same kind.
+</Aside>
+
+## Errors
+
+| Message | Cause |
+| --- | --- |
+| `no free colors available` (and likewise for the other kinds) | A claim at compile time finds no free resource. |
+| `globally allocated resources cannot be released at comptime` | A `@release_*` in a comptime context. |
+| `@count_free counts the free resources of a kind given by its ID type: ...` | The argument of `@count_free` is not one of the six ID types. |

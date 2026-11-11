@@ -1,0 +1,10 @@
+// RUN: csl-s2s %s --verify-diagnostics
+
+// =============================================================================
+// Test @get_rectangle error when rectangle is not configured
+// =============================================================================
+
+comptime {
+  // expected-error @+1 {{@get_rectangle requires rectangle to be specified (@set_rectangle)}}
+  const rect = @get_rectangle();
+}

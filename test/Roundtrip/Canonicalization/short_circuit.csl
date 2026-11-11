@@ -1,0 +1,51 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// false and x => false (short-circuit, RHS not evaluated)
+// =============================================================================
+
+// CHECK: export fn and_false(param0: bool) bool {
+// CHECK:     return false;
+// CHECK: }
+export fn and_false(x: bool) bool {
+    return false and x;
+}
+
+// -----
+
+// =============================================================================
+// true or x => true (short-circuit, RHS not evaluated)
+// =============================================================================
+
+// CHECK: export fn or_true(param0: bool) bool {
+// CHECK:     return true;
+// CHECK: }
+export fn or_true(x: bool) bool {
+    return true or x;
+}
+
+// -----
+
+// =============================================================================
+// true and x => x (LHS doesn't short-circuit, result is RHS)
+// =============================================================================
+
+// CHECK: export fn and_true(param0: bool) bool {
+// CHECK:     return param0;
+// CHECK: }
+export fn and_true(x: bool) bool {
+    return true and x;
+}
+
+// -----
+
+// =============================================================================
+// false or x => x (LHS doesn't short-circuit, result is RHS)
+// =============================================================================
+
+// CHECK: export fn or_false(param0: bool) bool {
+// CHECK:     return param0;
+// CHECK: }
+export fn or_false(x: bool) bool {
+    return false or x;
+}

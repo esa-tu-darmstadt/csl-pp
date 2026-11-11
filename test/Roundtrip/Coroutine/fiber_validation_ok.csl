@@ -1,0 +1,284 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false \
+// RUN:   | FileCheck %s
+//
+// Counterpart to fiber_validation_errors.csl: the sections here have the
+// same shape as rejected cases there, but add a `stack_size(N)` override
+// that vouches for the stack reach.  Validation must accept these and the
+// named function must survive the pipeline through to the emitted CSL.
+//
+// The fiber runtime is imported via a sibling-relative path with debug
+// prints disabled, so it needs no SDK system modules.
+
+// =============================================================================
+// Indirect call inside a sync helper with a stack_size override — the
+// override is used instead of the indirect call's possible callees.
+// =============================================================================
+
+// CHECK-LABEL: fn helper_icall_ok() void {
+// CHECK-NEXT:    var fp:
+// CHECK:         fp();
+// CHECK:       }
+
+const STATE_ICALL: local_task_id = @get_local_task_id(1);
+
+async task root_icall_ok() void {
+  helper_icall_ok();
+}
+
+fn helper_icall_ok() stack_size(128) void {
+  var fp: *const fn() void = leaf_a;
+  fp();
+}
+
+fn leaf_a() void {}
+
+comptime { @bind_local_task(root_icall_ok, STATE_ICALL); }
+fn fstart_icall() void { @coro_runtime_init(); @activate(STATE_ICALL); }
+comptime { @export_symbol(fstart_icall); }
+
+// -----
+
+// =============================================================================
+// Indirect call directly inside an async task that carries the override.
+// =============================================================================
+
+// CHECK-LABEL: fn root_icall_task_ok() void {
+// CHECK:         fp();
+
+const STATE_ICALL_TASK: local_task_id = @get_local_task_id(1);
+
+async task root_icall_task_ok() stack_size(128) void {
+  var fp: *const fn() void = leaf_b;
+  fp();
+}
+
+fn leaf_b() void {}
+
+comptime { @bind_local_task(root_icall_task_ok, STATE_ICALL_TASK); }
+fn fstart_icall_task() void { @coro_runtime_init(); @activate(STATE_ICALL_TASK); }
+comptime { @export_symbol(fstart_icall_task); }
+
+// -----
+
+// =============================================================================
+// Extern function reachable from async code — accepted once `stack_size(N)`
+// is declared on the extern.
+// =============================================================================
+
+// CHECK: fn ext_ok(
+
+const STATE_EXT: local_task_id = @get_local_task_id(1);
+
+extern fn ext_ok() stack_size(64) void;
+
+async task root_extern_ok() void {
+  ext_ok();
+}
+
+comptime { @bind_local_task(root_extern_ok, STATE_EXT); }
+fn fstart_ext() void { @coro_runtime_init(); @activate(STATE_EXT); }
+comptime { @export_symbol(fstart_ext); }
+
+// -----
+
+// =============================================================================
+// Direct self-recursion — accepted once the recursive function carries a
+// stack_size override.  The call is not a tail call, which would become a
+// loop.
+// =============================================================================
+
+// CHECK-LABEL: fn recursive_self_ok() void {
+// CHECK:         recursive_self_ok();
+
+const STATE_REC: local_task_id = @get_local_task_id(1);
+var depth: u16 = 0;
+
+async task root_recursive_ok() void {
+  recursive_self_ok();
+}
+
+fn recursive_self_ok() stack_size(256) void {
+  recursive_self_ok();
+  depth += 1;
+}
+
+comptime { @bind_local_task(root_recursive_ok, STATE_REC); }
+fn fstart_rec() void { @coro_runtime_init(); @activate(STATE_REC); }
+comptime { @export_symbol(fstart_rec); }
+
+// -----
+
+// =============================================================================
+// Mutual recursion (A -> B -> A) — accepted once one of the functions in
+// the cycle carries `stack_size`.  The resolver treats stack_size'd nodes as
+// opaque, which breaks the cycle.
+// =============================================================================
+
+// CHECK-LABEL: fn funA_ok() void {
+// CHECK:         funB_ok();
+// CHECK-LABEL: fn funB_ok() void {
+// CHECK:         funA_ok();
+
+const STATE_MUT: local_task_id = @get_local_task_id(1);
+
+async task root_mutual_ok() void {
+  funA_ok();
+}
+
+fn funA_ok() stack_size(512) void {
+  funB_ok();
+}
+
+fn funB_ok() void {
+  funA_ok();
+}
+
+comptime { @bind_local_task(root_mutual_ok, STATE_MUT); }
+fn fstart_mut() void { @coro_runtime_init(); @activate(STATE_MUT); }
+comptime { @export_symbol(fstart_mut); }
+
+// -----
+
+// =============================================================================
+// Indirect call without any possible callee — only a warning, since no
+// function of the call's type has its address taken.
+// =============================================================================
+
+// CHECK-LABEL: fn helper_no_callee() void {
+// CHECK:         handler(@as(u16, 1));
+
+const STATE_NONE: local_task_id = @get_local_task_id(1);
+var handler: *const fn(u16) void;
+
+async task root_no_callee() void {
+  helper_no_callee();
+}
+
+fn helper_no_callee() void {
+  // expected-warning@+1 {{indirect call has no possible callee: no function of type 'fn(u16) void' has its address taken}}
+  handler(1);
+}
+
+comptime { @bind_local_task(root_no_callee, STATE_NONE); }
+fn fstart_none() void { @coro_runtime_init(); @activate(STATE_NONE); }
+comptime { @export_symbol(fstart_none); }
+
+// -----
+
+// =============================================================================
+// Self-recursion bounded by max_recursion_depth.
+// =============================================================================
+
+// CHECK-LABEL: fn fact(param0: u32) u32 {
+// CHECK:         fact(
+
+const STATE_FACT: local_task_id = @get_local_task_id(1);
+
+async task root_fact() void {
+  var r: u32 = fact(5);
+}
+
+fn fact(n: u32) max_recursion_depth(8) u32 {
+  if (n == 0) {
+    return 1;
+  }
+  return n * fact(n - 1);
+}
+
+comptime { @bind_local_task(root_fact, STATE_FACT); }
+fn fstart_fact() void { @coro_runtime_init(); @activate(STATE_FACT); }
+comptime { @export_symbol(fstart_fact); }
+
+// -----
+
+// =============================================================================
+// Mutual recursion between async fns through @await, bounded by one
+// annotation, inside a callee of @await_parallel.  The recursion stays
+// within the callee's stack region.
+// =============================================================================
+
+// CHECK-LABEL: fn asyncA_ok(
+// CHECK:         asyncB_ok(
+// CHECK-LABEL: fn asyncB_ok(
+// CHECK:         asyncA_ok(
+
+const STATE_AREC: local_task_id = @get_local_task_id(1);
+
+async task root_async_rec() void {
+  @await_parallel(asyncA_ok(3), leaf_rec());
+}
+
+async fn asyncA_ok(n: u16) max_recursion_depth(4) void {
+  if (n == 0) {
+    return;
+  }
+  @await(asyncB_ok(n - 1));
+}
+
+async fn asyncB_ok(n: u16) void {
+  @await(asyncA_ok(n));
+}
+
+async fn leaf_rec() void {}
+
+comptime { @bind_local_task(root_async_rec, STATE_AREC); }
+fn fstart_arec() void { @coro_runtime_init(); @activate(STATE_AREC); }
+comptime { @export_symbol(fstart_arec); }
+
+// -----
+
+// =============================================================================
+// Annotations that have no effect produce warnings.
+// =============================================================================
+
+// CHECK-LABEL: fn both_annotations(
+// CHECK-LABEL: fn not_recursive(
+
+const STATE_WARN: local_task_id = @get_local_task_id(1);
+
+async task root_warn() void {
+  var r: u32 = both_annotations(3) + not_recursive(1);
+}
+
+// expected-warning@+1 {{'max_recursion_depth' is ignored because 'stack_size' already declares the stack reach of 'both_annotations'; remove one of the two modifiers}}
+fn both_annotations(n: u32) stack_size(256) max_recursion_depth(4) u32 {
+  if (n == 0) {
+    return 0;
+  }
+  return 1 + both_annotations(n - 1);
+}
+
+// expected-warning@+1 {{'max_recursion_depth' has no effect because 'not_recursive' is not recursive; remove it}}
+fn not_recursive(n: u32) max_recursion_depth(2) u32 {
+  return n;
+}
+
+comptime { @bind_local_task(root_warn, STATE_WARN); }
+fn fstart_warn() void { @coro_runtime_init(); @activate(STATE_WARN); }
+comptime { @export_symbol(fstart_warn); }
+
+// -----
+
+// =============================================================================
+// Tail recursion needs no annotation: it is compiled into a loop.
+// =============================================================================
+
+// CHECK-LABEL: fn countdown_tail(param0: u16) void {
+// CHECK:         while (true) {
+
+const STATE_TAIL: local_task_id = @get_local_task_id(1);
+
+async task root_tail() void {
+  countdown_tail(3);
+}
+
+fn countdown_tail(n: u16) void {
+  if (n == 0) {
+    return;
+  }
+  countdown_tail(n - 1);
+}
+
+comptime { @bind_local_task(root_tail, STATE_TAIL); }
+fn fstart_tail() void { @coro_runtime_init(); @activate(STATE_TAIL); }
+comptime { @export_symbol(fstart_tail); }

@@ -1,0 +1,58 @@
+// y = Ax + b on a kernel_cols x kernel_rows rectangle of PEs.
+//
+// Coroutine version — the collectives_2d library claims its own routing
+// colors and the kernel does not need to thread entrypoint task IDs through.
+
+// Kernel rectangle of PEs
+param kernel_rows : u16; // Height of kernel
+param kernel_cols : u16; // Width of kernel
+
+// Global matrix dimensions
+param matrix_rows : u16; // Height of matrix
+param matrix_cols : u16; // Width of matrix
+
+comptime {
+    @comptime_assert(matrix_rows % kernel_rows == 0);
+    @comptime_assert(matrix_cols % kernel_cols == 0);
+}
+
+const Mt: u16 = matrix_rows / kernel_rows; // Number of rows per PE
+const Nt: u16 = matrix_cols / kernel_cols; // Number of columns per PE
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+    .width  = kernel_cols,
+    .height = kernel_rows,
+});
+
+const c2d = @import_module("../csl-libs/collectives_2d/layout.csl");
+
+layout {
+    @set_rectangle(kernel_cols, kernel_rows);
+
+    var Px: u16 = 0;
+    while (Px < kernel_cols) : (Px += 1) {
+        const memcpy_params = memcpy.get_params(Px);
+        var Py: u16 = 0;
+        while (Py < kernel_rows) : (Py += 1) {
+            const c2d_params = c2d.get_params(Px, Py);
+            @set_tile_code(Px, Py, "pe.csl", .{
+                .memcpy_params = memcpy_params,
+                .c2d_params    = c2d_params,
+                .Mt = Mt,
+                .Nt = Nt,
+            });
+        }
+    }
+
+    @export_name("A", [*]f32, true);
+    @export_name("x", [*]f32, true);
+    @export_name("b", [*]f32, true);
+    @export_name("y", [*]f32, true);
+    @export_name("time_buf_u16", [*]u16, true);
+    @export_name("f_init",              fn()void);
+    @export_name("f_enable_timer",      fn()void);
+    @export_name("f_tic",               fn()void);
+    @export_name("f_toc",               fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
+    @export_name("main",                fn()void);
+}

@@ -1,0 +1,41 @@
+// RUN: sed "s|TEST_DIR|%/p|g" %s | csl-lsp-server -lit-test | FileCheck -strict-whitespace %s
+// Test: goto-definition for direct calls and module member calls.
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"processId":123,"rootPath":"csl","capabilities":{},"trace":"off"}}
+// -----
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+  "uri":"file://TEST_DIR/Inputs/main_definition.csl",
+  "languageId":"csl",
+  "version":1,
+  "text":"const mod = @import_module(\"module_a.csl\");\n\nfn local_fn(x: u32) u32 {\n    return x;\n}\n\nfn entry() void {\n    const a = local_fn(1);\n    const b = mod.add(1, 2);\n}\n"
+}}}
+// -----
+// Goto-definition on direct call "local_fn" (line 7, char 14) — should work.
+{"jsonrpc":"2.0","id":1,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"file://TEST_DIR/Inputs/main_definition.csl"},
+  "position":{"line":7,"character":14}
+}}
+//      CHECK:  "id": 1,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK:           "uri":
+// CHECK:    }
+// CHECK-NEXT:  ]
+// -----
+// Goto-definition on module call "mod.add" (line 8, on "add" at char 18) —
+// should navigate to add's definition in module_a.csl.
+{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{
+  "textDocument":{"uri":"file://TEST_DIR/Inputs/main_definition.csl"},
+  "position":{"line":8,"character":18}
+}}
+//      CHECK:  "id": 2,
+// CHECK-NEXT:  "jsonrpc": "2.0",
+// CHECK-NEXT:  "result": [
+// CHECK-NEXT:    {
+// CHECK:           "uri": "{{.*}}module_a.csl"
+// CHECK:    }
+// CHECK-NEXT:  ]
+// -----
+{"jsonrpc":"2.0","id":100,"method":"shutdown"}
+// -----
+{"jsonrpc":"2.0","method":"exit"}

@@ -1,0 +1,124 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false \
+// RUN:   | FileCheck %s
+//
+// Void has a single value, which is always comptime-known. Tuples and structs
+// may have void fields at runtime: the fields take no memory and are removed
+// from the output, since cslc does not allow them in runtime values.
+
+var counter: i32 = 0;
+var x: i32 = 0;
+fn g() void { counter += 1; }
+const V = struct { a: i32, b: void, c: i32 };
+var gt = .{ @as(i32, 1), {}, @as(i16, 2) };
+
+fn mk(y: i32) @type_of(.{ {}, @as(i32, 0) }) {
+  return .{ g(), y };
+}
+
+// CHECK: const [[V:.*]] = struct { a: i32, c: i32 };
+// CHECK: var gt: @type_of(.{ @as(i32, 0), @as(i16, 0) }) = .{ 1, 2 };
+// CHECK-LABEL: fn mk(param0: i32) @type_of(.{ @as(i32, 0) }) {
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    return .{ param0 };
+// The calls in void fields still run in source order: x is read before g()
+// and x + 1 after it.
+// CHECK-LABEL: export fn f() i32 {
+// CHECK-NEXT:    const [[X0:__csl_tmp[0-9]+]] = x;
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    var t: @type_of(.{ @as(i32, 0), @as(i32, 0) }) = .{ [[X0]], x + @as(i32, 1) };
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    const w: @type_of(.{ @as(i32, 0) }) = mk(t[1]);
+// CHECK-NEXT:    const [[X1:__csl_tmp[0-9]+]] = x;
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    var s: [[V]] = [[V]] { .a = [[X1]], .c = @as(i32, 3) };
+// CHECK:         const p: *@type_of(.{ @as(i32, 0), @as(i32, 0) }) = &t;
+// CHECK:         const q: *i16 = &gt[1];
+export fn f() i32 {
+  var t = .{x, g(), {}, x + 1};
+  t[1] = g();
+  const v = t[2];
+  const w = mk(t[3]);
+  var s = V { .a = x, .b = g(), .c = 3 };
+  s.b = {};
+  const p = &t;
+  const q = &gt[2];
+  return t[0] + t[3] + p.*[3] + w[1] + s.c + @field(t, "3") + @as(i32, q.*);
+}
+
+// -----
+
+// A tuple of only void fields becomes the empty tuple. Assigning it changes
+// nothing, so only the call remains.
+
+var counter: i32 = 0;
+fn g() void { counter += 1; }
+
+// CHECK-LABEL: fn units() @type_of(.{}) {
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    return .{};
+fn units() @type_of(.{ {}, {} }) {
+  g();
+  return .{ {}, g() };
+}
+
+// CHECK-LABEL: export fn f() void {
+// CHECK-NEXT:    const {{.*}} = units();
+export fn f() void {
+  var e = .{ {}, {} };
+  e = units();
+}
+
+// -----
+
+// A runtime variable cannot have a comptime-only type. Void is one, unlike a
+// struct with void fields.
+
+fn g() void {}
+
+export fn f() void {
+  // expected-error @+1 {{runtime variable 'v' cannot have type 'void', which only exists at compile time}}
+  var v: void = {};
+  v = g();
+}
+
+// -----
+
+var x: i32 = 0;
+
+export fn f() i32 {
+  // expected-error @+1 {{runtime variable 'r' cannot have type '.{ a: i32, b: comptime_int }', which only exists at compile time; declare the variable with an explicit runtime type}}
+  const r = .{ .a = x, .b = 3 };
+  return r.a;
+}
+
+// -----
+
+// Only values in memory have an address.
+
+var x: i32 = 0;
+
+export fn f() void {
+  var t = .{ x, {} };
+  // expected-error @+1 {{cannot take the address of a value of type 'void', which only exists at compile time}}
+  const p = &t[1];
+}
+
+// -----
+
+export fn f() void {
+  const T = i32;
+  // expected-error @+1 {{cannot take the address of a value of type 'type', which only exists at compile time}}
+  const p = &T;
+}
+
+// -----
+
+var counter: i32 = 0;
+
+export fn f() void {
+  const n = 5;
+  // expected-error @+1 {{cannot take the address of a value of type 'comptime_int', which only exists at compile time; to take its address, give it a runtime integer type}}
+  const p = &n;
+  counter += p.*;
+}

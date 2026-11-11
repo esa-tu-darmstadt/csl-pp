@@ -1,0 +1,511 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Direct function call
+// =============================================================================
+
+fn helper(x: i32) i32 {
+  return x * 2;
+}
+
+// CHECK: export fn direct_call() i32 {
+// CHECK:     return helper(@as(i32, 21));
+// CHECK: }
+export fn direct_call() i32 {
+  return helper(21);
+}
+
+// -----
+
+// =============================================================================
+// Intra-scope call chain (function calling another function)
+// =============================================================================
+
+fn add(a: i32, b: i32) i32 {
+  return a + b;
+}
+
+// CHECK: fn triple_add([[a:.*]]: i32, [[b:.*]]: i32, [[c:.*]]: i32) i32 {
+// CHECK:     return add(add([[a]], [[b]]), [[c]]);
+// CHECK: }
+fn triple_add(a: i32, b: i32, c: i32) i32 {
+  return add(add(a, b), c);
+}
+
+// CHECK: export fn call_chain() i32 {
+// CHECK:     return triple_add(@as(i32, 1), @as(i32, 2), @as(i32, 3));
+// CHECK: }
+export fn call_chain() i32 {
+  return triple_add(1, 2, 3);
+}
+
+// -----
+
+// =============================================================================
+// Generic function call with type instantiation
+// =============================================================================
+
+fn identity(comptime T: type, x: T) T {
+  return x;
+}
+
+// CHECK: fn identity([[x:.*]]: i32) i32 {
+// CHECK:     return [[x]];
+// CHECK: }
+
+// CHECK: export fn call_generic() i32 {
+// CHECK:     return identity(@as(i32, 42));
+// CHECK: }
+export fn call_generic() i32 {
+  return identity(i32, 42);
+}
+
+// -----
+
+// =============================================================================
+// Generic function with comptime value parameter
+// =============================================================================
+
+fn scale(comptime factor: i32, x: i32) i32 {
+  return x * factor;
+}
+
+// CHECK: fn scale([[x:.*]]: i32) i32 {
+// CHECK:     return [[x]] * @as(i32, 3);
+// CHECK: }
+
+// CHECK: export fn call_with_comptime_value() i32 {
+// CHECK:     return scale(@as(i32, 10));
+// CHECK: }
+export fn call_with_comptime_value() i32 {
+  return scale(3, 10);
+}
+
+// -----
+
+// =============================================================================
+// Multiple generic instantiations of the same function
+// =============================================================================
+
+fn double_val(comptime T: type, x: T) T {
+  return x + x;
+}
+
+// CHECK-DAG: fn [[DOUBLE_F32:double_val_inst[0-9]+]]({{.*}}: f32) f32 {{{[[:space:]].*}}return {{.*}} + {{.*}};
+// CHECK-DAG: fn [[DOUBLE_I32:double_val_inst[0-9]+]]({{.*}}: i32) i32 {{{[[:space:]].*}}return {{.*}} + {{.*}};
+
+// CHECK: export fn multiple_instantiations([[xi:.*]]: i32, [[yf:.*]]: f32) f32 {
+// CHECK:     const a: i32 = [[DOUBLE_I32]]([[xi]]);
+// CHECK:     const b: f32 = [[DOUBLE_F32]]([[yf]]);
+// CHECK:     return @as(f32, a) + b;
+// CHECK: }
+export fn multiple_instantiations(x: i32, y: f32) f32 {
+  const a = double_val(i32, x);
+  const b = double_val(f32, y);
+  return @as(f32, a) + b;
+}
+
+// -----
+
+// =============================================================================
+// Indirect call through function pointer parameter
+// =============================================================================
+
+// CHECK: fn apply([[func:.*]]: *const fn(i32) i32, [[x:.*]]: i32) i32 {
+// CHECK:     return [[func]]([[x]]);
+// CHECK: }
+fn apply(func: *const fn(i32) i32, x: i32) i32 {
+  return func(x);
+}
+
+fn increment(x: i32) i32 {
+  return x + 1;
+}
+
+// CHECK: export fn indirect_call() i32 {
+// CHECK:     return apply(&increment, @as(i32, 10));
+// CHECK: }
+export fn indirect_call() i32 {
+  return apply(increment, 10);
+}
+
+// -----
+
+// =============================================================================
+// Indirect call with local function pointer variable
+// =============================================================================
+
+fn mul2(x: i32) i32 {
+  return x * 2;
+}
+
+fn mul3(x: i32) i32 {
+  return x * 3;
+}
+
+// CHECK: export fn indirect_via_variable([[use_mul2:.*]]: bool) i32 {
+export fn indirect_via_variable(use_mul2: bool) i32 {
+  // CHECK: var fp: *const fn(i32) i32 = &mul2;
+  var fp: *const fn(i32) i32 = mul2;
+  // CHECK: if (![[use_mul2]])
+  // CHECK:     fp = &mul3;
+  if (!use_mul2) {
+    fp = mul3;
+  }
+  // CHECK: return fp(@as(i32, 5));
+  return fp(5);
+}
+
+// -----
+
+// =============================================================================
+// Comptime-known callback parameter (callback is inlined at comptime)
+// =============================================================================
+
+fn transform(comptime cb: fn(i32) i32, x: i32) i32 {
+  return cb(x);
+}
+
+fn square(x: i32) i32 {
+  return x * x;
+}
+
+// The comptime callback gets inlined, so transform is instantiated with square
+// CHECK: fn transform([[x:.*]]: i32) i32 {
+// CHECK:     return square([[x]]);
+// CHECK: }
+
+// CHECK: export fn comptime_callback() i32 {
+// CHECK:     return transform(@as(i32, 7));
+// CHECK: }
+export fn comptime_callback() i32 {
+  return transform(square, 7);
+}
+
+// -----
+
+// =============================================================================
+// Comptime callback with different callbacks
+// =============================================================================
+
+fn map_value(comptime op: fn(i32) i32, x: i32) i32 {
+  return op(x);
+}
+
+fn negate(x: i32) i32 {
+  return -x;
+}
+
+fn double_it(x: i32) i32 {
+  return x * 2;
+}
+
+// CHECK-DAG: fn [[MAP_NEGATE:map_value_inst[0-9]+]]({{.*}}: i32) i32 {{{[[:space:]].*}}return negate({{.*}});
+// CHECK-DAG: fn [[MAP_DOUBLE:map_value_inst[0-9]+]]({{.*}}: i32) i32 {{{[[:space:]].*}}return double_it({{.*}});
+
+// CHECK: export fn multiple_callbacks([[x:.*]]: i32) i32 {
+// CHECK:     const a: i32 = [[MAP_NEGATE]]([[x]]);
+// CHECK:     const b: i32 = [[MAP_DOUBLE]]([[x]]);
+// CHECK:     return a + b;
+// CHECK: }
+export fn multiple_callbacks(x: i32) i32 {
+  const a = map_value(negate, x);
+  const b = map_value(double_it, x);
+  return a + b;
+}
+
+// -----
+
+// =============================================================================
+// Module function call at runtime
+// =============================================================================
+
+const mod = @import_module("Modules/call_module.csl.module");
+
+// CHECK: fn mod__add([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return [[a]] + [[b]];
+// CHECK: }
+
+// CHECK: export fn call_module_func([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return mod__add([[a]], [[b]]);
+// CHECK: }
+export fn call_module_func(a: i32, b: i32) i32 {
+  return mod.add(a, b);
+}
+
+// -----
+
+// =============================================================================
+// Module with generic function called at runtime
+// =============================================================================
+
+const gmod = @import_module("Modules/call_module.csl.module");
+
+// CHECK: fn gmod__generic_mul([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return [[a]] * [[b]];
+// CHECK: }
+
+// CHECK: export fn call_module_generic([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return gmod__generic_mul([[a]], [[b]]);
+// CHECK: }
+export fn call_module_generic(a: i32, b: i32) i32 {
+  return gmod.generic_mul(i32, a, b);
+}
+
+// -----
+
+// =============================================================================
+// Intra-module calls (function in module calling another function in same module)
+// =============================================================================
+
+const imod = @import_module("Modules/call_module.csl.module");
+
+// CHECK: fn imod__double_add([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return imod__add([[a]], [[b]]) * @as(i32, 2);
+// CHECK: }
+
+// CHECK: export fn call_intra_module([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return imod__double_add([[a]], [[b]]);
+// CHECK: }
+export fn call_intra_module(a: i32, b: i32) i32 {
+  return imod.double_add(a, b);
+}
+
+// -----
+
+// =============================================================================
+// Module passed as parameter to another module (imported_module)
+// =============================================================================
+
+const inner_mod = @import_module("Modules/call_module.csl.module");
+const outer_mod = @import_module("Modules/outer_module.csl.module", .{ .inner_mod = inner_mod });
+
+// CHECK: fn outer_mod__call_inner_fn([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return inner_mod__add([[a]], [[b]]) * @as(i32, 2);
+// CHECK: }
+
+// CHECK: export fn call_outer_module([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return outer_mod__call_inner_fn([[a]], [[b]]);
+// CHECK: }
+export fn call_outer_module(a: i32, b: i32) i32 {
+  return outer_mod.call_inner_fn(a, b);
+}
+
+// -----
+
+// =============================================================================
+// Call with no arguments
+// =============================================================================
+
+fn get_constant() i32 {
+  return 123;
+}
+
+// CHECK: export fn call_no_args() i32 {
+// CHECK:     return get_constant();
+// CHECK: }
+export fn call_no_args() i32 {
+  return get_constant();
+}
+
+// -----
+
+// =============================================================================
+// Call with void return
+// =============================================================================
+
+var global_counter: i32 = 0;
+
+fn increment_counter() void {
+  global_counter = global_counter + 1;
+}
+
+// CHECK: export fn call_void_return() void {
+// CHECK:     increment_counter();
+// CHECK: }
+export fn call_void_return() void {
+  increment_counter();
+}
+
+// -----
+
+// =============================================================================
+// Nested calls as arguments
+// =============================================================================
+
+fn add_one(x: i32) i32 {
+  return x + 1;
+}
+
+fn multiply_by_two(x: i32) i32 {
+  return x * 2;
+}
+
+// CHECK: export fn nested_calls() i32 {
+// CHECK:     return multiply_by_two(add_one(add_one(@as(i32, 5))));
+// CHECK: }
+export fn nested_calls() i32 {
+  return multiply_by_two(add_one(add_one(5)));
+}
+
+// -----
+
+// =============================================================================
+// Call result used in binary operation
+// =============================================================================
+
+fn compute(x: i32) i32 {
+  return x * x;
+}
+
+// CHECK: export fn call_in_binop([[n:.*]]: i32) i32 {
+// CHECK:     return compute([[n]]) + compute([[n]] + @as(i32, 1));
+// CHECK: }
+export fn call_in_binop(n: i32) i32 {
+  return compute(n) + compute(n + 1);
+}
+
+// -----
+
+// =============================================================================
+// Recursive function
+// =============================================================================
+
+// CHECK: fn factorial([[n:.*]]: i32) i32 {
+// CHECK:     if ([[n]] <= {{.*}})
+// CHECK:         return {{.*}};
+// CHECK:     return [[n]] * factorial([[n]] - {{.*}});
+// CHECK: }
+fn factorial(n: i32) i32 {
+  if (n <= 1) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+
+// CHECK: export fn call_recursive([[n:.*]]: i32) i32 {
+// CHECK:     return factorial([[n]]);
+// CHECK: }
+export fn call_recursive(n: i32) i32 {
+  return factorial(n);
+}
+
+// -----
+
+// =============================================================================
+// anytype parameter with type inference
+// =============================================================================
+
+fn anytype_add(a: anytype, b: @type_of(a)) @type_of(a) {
+  return a + b;
+}
+
+// CHECK: fn anytype_add([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return [[a]] + [[b]];
+// CHECK: }
+
+// CHECK: export fn call_anytype([[a:.*]]: i32, [[b:.*]]: i32) i32 {
+// CHECK:     return anytype_add([[a]], [[b]]);
+// CHECK: }
+export fn call_anytype(a: i32, b: i32) i32 {
+  return anytype_add(a, b);
+}
+
+// -----
+
+// =============================================================================
+// Comptime callback returning void
+// =============================================================================
+
+var effect_counter: i32 = 0;
+
+fn with_effect(comptime effect: fn() void, x: i32) i32 {
+  effect();
+  return x;
+}
+
+fn side_effect() void {
+  effect_counter = effect_counter + 1;
+}
+
+// CHECK: fn with_effect([[x:.*]]: i32) i32 {
+// CHECK:     side_effect();
+// CHECK:     return [[x]];
+// CHECK: }
+
+// CHECK: export fn call_void_callback() i32 {
+// CHECK:     return with_effect(@as(i32, 42));
+// CHECK: }
+export fn call_void_callback() i32 {
+  return with_effect(side_effect, 42);
+}
+
+// -----
+
+// =============================================================================
+// Call of a function thats can only be comptime called
+// =============================================================================
+
+const archs = [2]comptime_string{"wse2", "wse3"};
+// CHECK: var current_arch: i32 = @as(i32, 0);
+var current_arch: i32 = comptime_only_function();
+
+// This function is only valid at comptime because @is_arch requires a comptime-known
+// string and the for-loop is only unrolled during comptime-calls.
+
+// CHECK-NOT: fn comptime_only_function() i32 {
+fn comptime_only_function() i32 {
+  for(@range(u16, 2)) |index| {
+    if (@is_arch(archs[index])) {
+      return index;
+    }
+  }
+}
+
+// CHECK: export fn get_current_arch() i32 {
+// CHECK-NEXT:    return current_arch;
+// CHECK-NEXT: }
+export fn get_current_arch() i32 {
+  return current_arch;
+}
+
+// =============================================================================
+// Builtin comptime arg wrapping: type arguments of builtins like @bitcast
+// are automatically wrapped in comptime context, so calling a function that
+// returns a type works even from a runtime function.
+// =============================================================================
+
+fn bits_type(comptime T: type) type {
+  return u32;
+}
+
+// CHECK: export fn test_comptime_arg_wrapping(param0: u32) u32 {
+// CHECK-NEXT:    return @bitcast(u32, param0);
+// CHECK-NEXT: }
+export fn test_comptime_arg_wrapping(x: u32) u32 {
+  return @bitcast(bits_type(u32), x);
+}
+
+
+// -----
+
+// =============================================================================
+// Error: Runtime call of a function that can only be comptime called
+// =============================================================================
+
+const archs = [2]comptime_string{"wse2", "wse3"};
+
+// This function is only valid at comptime because @is_arch requires a comptime-known
+// string and the for-loop is only unrolled during comptime-calls.
+fn comptime_only_function() i32 {
+  for(@range(u16, 2)) |index| {
+    // expected-error @+1 {{'index' is not comptime-known}}
+    if (@is_arch(archs[index])) {
+      return index;
+    }
+  }
+}
+
+export fn get_current_arch() i32 {
+  return comptime_only_function();
+}

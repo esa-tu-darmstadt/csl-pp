@@ -1,0 +1,70 @@
+---
+title: Calling async functions
+description: "@await calls one async function; @await_parallel runs several at the same time."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+An async function is called with `@await`, which returns its result, or as one of the calls of `@await_parallel`, which runs them at the same time. Both are only allowed in async functions and async tasks, and the call must be written directly inside them: `@await(f(1))`, not `const c = f(1);`.
+
+## `@await`
+
+```csl
+@await(f(arguments)) ResultType
+```
+
+Calls `f` and returns its result when `f` has returned. If `f` suspends, the caller is suspended as well, and both continue when `f` continues:
+
+<Example file="language/async/src/pe.csl" region="await" />
+
+`f` runs on the hardware task of the caller, like an ordinary function call: its stack frame is placed on the caller's stack, and `@current_task()` in `f` is the caller's task. `@await` uses no task ID and no memory beyond the frame of `f`.
+
+`@await` is an expression and can be used wherever its result type is allowed: `@await(next(1)) + @await(next(2))` awaits two calls one after the other, from left to right.
+
+## `@await_parallel`
+
+```csl
+@await_parallel(f(arguments), g(arguments), ...)
+```
+
+Runs two or more calls of async functions at the same time and returns when all of them have returned. While one call waits for an operation, the others run:
+
+<Example file="language/async/src/pe.csl" region="await-parallel" />
+
+The result is a tuple with one field per call, in the order of the calls. The field of a call that returns `void` is `{}` and takes no memory. If all calls return `void`, the result is `void`.
+
+### Worker tasks
+
+The first call runs on the hardware task of the caller, like a call with `@await`. Every other call runs on a worker task: a local task that the runtime claims when the call starts, with the same allocator as [`@claim_local_task()`](../resources/), and releases when the call returns. `@current_task()` in such a call is the worker task, so an operation that the call starts with `.activate = @current_task()` resumes that call and no other.
+
+Each call has a region of the caller's stack of its own, so the calls can suspend at different points; see [Stacks](../stacks/). The caller continues after the last call has returned.
+
+Workers are claimed from the local task entries that the program has not bound or claimed. If no entry is free when a worker is needed, the PE halts. `csl-pp` computes an upper bound of the workers that can be active at the same time, assuming that all calls of every `@await_parallel` run at once, and compares it with the entries the program leaves free:
+
+- If the bound exceeds the free entries, it warns: `cannot prove that enough local tasks are free for the workers of @await_parallel`.
+- If the program also claims local tasks at runtime (on WSE-2, also colors or data tasks), it cannot check this, and reports a remark.
+
+A program can check at runtime how many local task entries are free with [`@count_free(local_task_id)`](../resources/#counting-free-resources), and fall back to sequential calls:
+
+<Example file="language/async/src/pe.csl" region="count-free" />
+
+### Rules
+
+- `@await_parallel` takes at least two calls.
+- The arguments of each call after the first, together with the address its result is stored to, must fit into four 16-bit registers. A 32-bit argument takes two registers that start at an even register. Pass a pointer to a struct to pass more. Otherwise, `csl-pp` reports that the arguments `do not fit into its four 16-bit argument registers`.
+- A recursion must not run through a call of an `@await_parallel` with several calls, because the stack region of each call has a fixed size. Recursion inside such a call is allowed; see [Stacks](../stacks/).
+- `@await_parallel` can be used in loops and nested in the calls of another `@await_parallel`. Workers are reused after their call returns.
+
+<Aside>
+Two calls that run at the same time must not use the same queue or microthread for asynchronous operations, as in CSL. Libraries that claim their queues, like those in [Libraries](../../libraries/), meet this rule when they are imported once per concurrent use.
+</Aside>
+
+## Errors
+
+| Message | Cause |
+| --- | --- |
+| `calls to async functions are only allowed in async functions or tasks` | An ordinary function or task calls an async function. |
+| `the call of async function 'f' must be awaited where it is made` | A call of an async function is not the argument of `@await` or `@await_parallel`. |
+| `'@await' is only allowed inside an async function or async task` | `@await` in an ordinary function or task. |
+| `async functions cannot be evaluated at comptime` | An async function is called in a comptime context. |

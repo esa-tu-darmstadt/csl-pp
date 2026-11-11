@@ -1,0 +1,56 @@
+param memcpy_params;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+var result: [1]u32;
+var result_ptr: [*]u32 = &result;
+
+// region: recursion
+// At most 16 calls of fib are active at the same time.
+fn fib(n: u16) max_recursion_depth(16) u16 {
+  if (n < 2) {
+    return n;
+  }
+  return fib(n - 1) + fib(n - 2);
+}
+// endregion
+
+// region: tail-call
+// The recursive call is a tail call, so it is compiled into a loop.
+fn gcd(a: u16, b: u16) u16 {
+  if (b == 0) {
+    return a;
+  }
+  return gcd(b, a % b);
+}
+// endregion
+
+// region: stack-size
+// Declares that wait_and_add and everything it calls need at most 128 bytes
+// of stack, so csl-pp does not measure it.
+async fn wait_and_add(a: u16, b: u16) stack_size(128) u16 {
+  @activate(@current_task());
+  suspend;
+  return a + b;
+}
+// endregion
+
+const main_task_id: local_task_id = @claim_local_task();
+
+async task main_task() void {
+  const sums = @await_parallel(wait_and_add(1, 2), wait_and_add(3, 4));
+  result[0] = @as(u32, fib(10)) + @as(u32, gcd(48, 18)) + @as(u32, sums[0] + sums[1]);
+  sys_mod.unblock_cmd_stream();
+}
+
+// Called by the host.
+fn compute() void {
+  @coro_runtime_init();
+  @activate(main_task_id);
+}
+
+comptime {
+  @bind_local_task(main_task, main_task_id);
+  @export_symbol(result_ptr, "result");
+  @export_symbol(compute);
+}

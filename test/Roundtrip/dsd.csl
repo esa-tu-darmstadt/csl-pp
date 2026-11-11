@@ -1,0 +1,83 @@
+// RUN: csl-s2s %s --split-input-file | FileCheck %s
+
+// =============================================================================
+// Memory DSD with tensor access expression
+// =============================================================================
+
+// CHECK: const [[TAE_TYPE:__struct_[0-9]+]] = struct { base_address: [*]u16, offset: i16, stride: i8, extent: u16 };
+// CHECK: export fn use_tae(param0: [*]u16) void {
+// CHECK:     const tae: [[TAE_TYPE]]
+// CHECK:     const dsd: mem1d_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = tae });
+// CHECK:     @mov16(dsd, dsd);
+// CHECK: }
+export fn use_tae(ptr: [*]u16) void {
+    const tae = |i|{10} -> ptr[2 * i];
+    const dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = tae });
+    @mov16(dsd, dsd);
+}
+
+// -----
+
+// =============================================================================
+// Multi-dimensional (2D) tensor access expression
+// =============================================================================
+
+// CHECK: const [[TAE_2D_TYPE:__struct_[0-9]+]] = struct { base_address: [*]u16, offset: i16, stride: @type_of(.{ @as(i16, 0), @as(i16, 0) }), extent: @type_of(.{ @as(u16, 0), @as(u16, 0) }) };
+// CHECK: export fn use_tae_2d(param0: [*]u16) void {
+// CHECK:     const tae: [[TAE_2D_TYPE]] = .{ .base_address = param0, .offset = @as(i16, 0), .stride = .{ @as(i16, 1), @as(i16, 1) }, .extent = .{ @as(u16, 4), @as(u16, 10) } };
+// CHECK:     const dsd: mem4d_dsd = @get_dsd(mem4d_dsd, .{ .tensor_access = tae });
+// CHECK:     @mov16(dsd, dsd);
+// CHECK: }
+export fn use_tae_2d(ptr: [*]u16) void {
+    const tae = |i, j|{4, 10} -> ptr[i * 10 + j];
+    const dsd = @get_dsd(mem4d_dsd, .{ .tensor_access = tae });
+    @mov16(dsd, dsd);
+}
+
+// -----
+
+// =============================================================================
+// Comptime-known DSD
+// =============================================================================
+
+// CHECK: var buffer: [20]u16 = [20]u16{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+var buffer = @zeros([20]u16);
+
+// Comptime-known DSD is not emitted as a global, it gets inlined
+const my_dsd = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{20} -> buffer[i]
+});
+
+// Comptime known DSD gets inlined into function
+// CHECK: export fn use_comptime_dsd() void {
+// CHECK:     const [[TMP:.*]] = @get_dsd(mem1d_dsd, .{ .base_address = &buffer, .offset = 0, .stride = 1, .extent = 20 });
+// CHECK:     @mov16([[TMP]], [[TMP]]);
+// CHECK: }
+export fn use_comptime_dsd() void {
+    @mov16(my_dsd, my_dsd);
+}
+
+// -----
+
+// =============================================================================
+// SDK 2.10 SIMD mode option structs survive comptime DSD evaluation (the
+// WSE-2 modes; WSE-3 has simd_off and simd_max instead)
+// =============================================================================
+
+var simd_buffer = @zeros([20]u16);
+const simd_input = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{20} -> simd_buffer[i]
+});
+const simd16_out = @get_dsd(fabout_dsd, .{
+    .extent = 20,
+    .fabric_color = @get_color(1),
+    .output_queue = @get_output_queue(3),
+    .simd_mode = .{ .simd_16 = true },
+});
+
+// CHECK: export fn use_sdk_2_10_simd_modes() void {
+// CHECK:     @mov16(@get_dsd(fabout_dsd, .{ .extent = 20, .fabric_color = @get_color(1), .output_queue = @get_output_queue(3), .simd_mode = .{ .simd_16 = true } }),
+// CHECK: }
+export fn use_sdk_2_10_simd_modes() void {
+    @mov16(simd16_out, simd_input);
+}

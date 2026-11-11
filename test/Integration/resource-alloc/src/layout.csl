@@ -1,0 +1,13 @@
+// Layout for resource allocation test: single PE.
+
+const memcpy = @import_module("<memcpy/get_params>", .{ .width = 1, .height = 1 });
+
+layout {
+    @set_rectangle(1, 1);
+
+    @set_tile_code(0, 0, "pe.csl", .{
+        .memcpy_params = memcpy.get_params(0),
+    });
+
+    @export_name("f_start", fn()void);
+}

@@ -1,0 +1,33 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Comptime-known switch input: matching branch value inlined
+// =============================================================================
+
+// CHECK: export fn switch_expr() i32 {
+// CHECK:     return @as(i32, 10);
+// CHECK: }
+export fn switch_expr() i32 {
+    return switch (@as(i32, 10)) {
+        1 => 5,
+        10 => 10,
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// Comptime-known switch input: matching branch with control-flow inlined
+// =============================================================================
+
+// CHECK: export fn switch_expr() i32 {
+// CHECK:     return @as(i32, 10);
+// CHECK: }
+export fn switch_expr() i32 {
+    return switch (@as(i32, 10)) {
+        1 => 5,
+        10 => { return 10; },
+        else => 0
+    };
+}

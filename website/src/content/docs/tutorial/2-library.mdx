@@ -1,0 +1,49 @@
+---
+title: 2. Inside a library
+description: How the stencil library suspends while the fabric works, and runs its sends and receives at the same time.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+The solver loop awaits `stencil.spmv`, which exchanges the column of the PE with its four neighbors and applies the stencil. This step opens the library to show the building blocks of an async function: `suspend`, `@current_task()` and `@await_parallel`.
+
+## Suspending for a DSD operation
+
+The library sends a block of the column to each neighbor. A send is an asynchronous DSD operation; in CSL it would activate a task when it completes. In csl++, it activates the task that is running the code, and the function suspends until then:
+
+<Example file="csl-libs/stencil_3d_7pts/wse3/pe.csl" region="send" />
+
+`@current_task()` is the ID of the hardware task that executes the code. `suspend` ends the current run of that task. When the send completes, the hardware activates the task again, and execution continues after the `suspend`, in the same function, with the same local variables. The four directions are written one after the other, and a PE on the edge of the rectangle skips the direction without a neighbor.
+
+The function is an `async fn`: it can suspend, and it can only be called with `@await` or `@await_parallel` from another async function or an async task. The receives are the same in the other direction:
+
+<Example file="csl-libs/stencil_3d_7pts/wse3/pe.csl" region="recv" />
+
+## Sending and receiving at the same time
+
+A PE cannot first send to all neighbors and then receive from them: its neighbors are sending at the same time, and a send completes only when the receiver takes the data. The sends and the receives must run concurrently. `@await_parallel` runs several async calls at the same time and returns when all of them have returned:
+
+<Example file="csl-libs/stencil_3d_7pts/wse3/pe.csl" region="blocks" />
+
+The first call runs on the task of the caller. Each further call runs on a worker task, a local task that the runtime claims when the call starts and releases when it returns; `@current_task()` inside that call is the worker, so each send and each receive resumes the function that started it. The two functions suspend independently and interleave as their operations complete.
+
+In the library of the SDK, the same exchange is a state machine of two tasks, `f_send` and `f_recv`, with a state variable each and a counter that tells when both are done. The ["hybrid" implementation](../../libraries/stencil_3d_7pts/) of the library keeps that state machine and shows the other way to use `suspend`: wrap a completion callback.
+
+## Wrapping a callback
+
+Some events are not DSD completions. The `allreduce` library ends each phase when a teardown control wavelet passes the PE, which the hardware reports by calling a handler function. The handler activates the task that is waiting, and the async function suspends until it does:
+
+<Example file="csl-libs/allreduce/pe.csl" region="teardown-handler" />
+
+<Example file="csl-libs/allreduce/pe.csl" region="row-reduce" />
+
+The function records `@current_task()` for the handler before it suspends, and checks whether the event already happened, because an activation resumes a suspended task but a task that is not suspended yet would be activated for nothing. The same pattern wraps any library of the SDK that takes a task to activate: pass `@current_task()` and suspend.
+
+<Aside>
+A suspended task resumes on any activation of its task ID. Code that activates a task for another purpose must therefore get a task ID of its own; see [Async functions and tasks](../../language/async/#suspend).
+</Aside>
+
+The [next step](../3-resources/) looks at the colors, queues and task IDs that the libraries use, and who allocates them.

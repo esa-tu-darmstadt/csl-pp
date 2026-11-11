@@ -1,0 +1,193 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Forward function reference: call function defined later
+// =============================================================================
+
+export fn caller() i32 {
+    return callee();
+}
+
+fn callee() i32 {
+    return 42;
+}
+
+// -----
+
+// =============================================================================
+// Mutual recursion: functions calling each other
+// =============================================================================
+
+fn is_even(n: i32) bool {
+    if (n == 0) {
+        return true;
+    }
+    return is_odd(n - 1);
+}
+
+fn is_odd(n: i32) bool {
+    if (n == 0) {
+        return false;
+    }
+    return is_even(n - 1);
+}
+
+export fn test_mutual_recursion() bool {
+    return is_even(4);
+}
+
+// -----
+
+// =============================================================================
+// Global referencing function defined later
+// =============================================================================
+
+const initial_value: i32 = get_default();
+
+fn get_default() i32 {
+    return 100;
+}
+
+export fn use_initial() i32 {
+    return initial_value;
+}
+
+// -----
+
+// =============================================================================
+// Multiple forward references in same function
+// =============================================================================
+
+export fn orchestrator() i32 {
+    const a = helper_a();
+    const b = helper_b();
+    const c = helper_c();
+    return a + b + c;
+}
+
+fn helper_a() i32 { return 1; }
+fn helper_b() i32 { return 2; }
+fn helper_c() i32 { return 3; }
+
+// -----
+
+// =============================================================================
+// Error: Duplicate function declaration
+// =============================================================================
+
+fn duplicate_func() void {}
+
+// expected-error @+1 {{symbol 'duplicate_func' already declared}}
+fn duplicate_func() void {}
+
+// -----
+
+// =============================================================================
+// Error: Function name conflicts with global variable (function first)
+// =============================================================================
+
+fn conflict_name() void {}
+
+// expected-error @+1 {{symbol 'conflict_name' already declared}}
+var conflict_name: i32 = 0;
+
+// -----
+
+// =============================================================================
+// Error: Function name conflicts with global variable (global first)
+// =============================================================================
+
+var another_conflict: i32 = 0;
+
+// expected-error @+1 {{symbol 'another_conflict' already declared}}
+fn another_conflict() void {}
+
+// -----
+
+// =============================================================================
+// Error: Function name shadows builtin type
+// =============================================================================
+
+// expected-error @+1 {{symbol 'i32' shadows builtin type}}
+fn i32() void {}
+
+// -----
+
+// =============================================================================
+// Forward reference with generic function
+// =============================================================================
+
+export fn use_generic() i32 {
+    return identity(i32, 42);
+}
+
+fn identity(comptime T: type, x: T) T {
+    return x;
+}
+
+// -----
+
+// =============================================================================
+// Simple global forward reference: use const defined later
+// =============================================================================
+
+const a: u16 = b;
+const b: u16 = 42;
+
+export fn use_a() u16 {
+    return a;
+}
+
+// -----
+
+// =============================================================================
+// Enum forward reference: use enum member before enum is defined
+// =============================================================================
+
+const INPUT_POS1: u16 = @as(u16, switch_pos.POS1);
+const switch_pos = enum(u16) { POS1, POS2, POS3 };
+
+export fn use_input_pos() u16 {
+    return INPUT_POS1;
+}
+
+// -----
+
+// =============================================================================
+// Transitive forward reference: A depends on B, B depends on C
+// =============================================================================
+
+const val_a: u16 = val_b;
+const val_b: u16 = val_c;
+const val_c: u16 = 7;
+
+export fn use_val_a() u16 {
+    return val_a;
+}
+
+// -----
+
+// =============================================================================
+// Forward reference with function call
+// =============================================================================
+
+const computed: u16 = compute(later_const);
+const later_const: u16 = 10;
+
+fn compute(x: u16) u16 {
+    return x + 1;
+}
+
+export fn use_computed() u16 {
+    return computed;
+}
+
+// -----
+
+// =============================================================================
+// Error: Circular dependency between globals
+// =============================================================================
+
+// expected-error @+1 {{circular dependency in global initialization of 'circ_a'}}
+export const circ_a: u16 = circ_b;
+const circ_b: u16 = circ_a;

@@ -1,0 +1,35 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false
+//
+// An async call is awaited where it is made, by @await or @await_parallel.
+
+const T = @get_local_task_id(10);
+async fn f(a: u16) u16 { return a + 1; }
+async task t() void {
+  // expected-error @+1 {{the call of async function 'f' must be awaited where it is made: write `@await(f(...))`, or pass the call to @await_parallel}}
+  f(4);
+}
+fn start() void { @coro_runtime_init(); @activate(T); }
+comptime { @bind_local_task(t, T); @export_symbol(start); }
+
+// -----
+
+const T = @get_local_task_id(10);
+async fn f(a: u16) u16 { return a + 1; }
+async task t() void {
+  // expected-error @+1 {{the call of async function 'f' must be awaited where it is made: write `@await(f(...))`, or pass the call to @await_parallel}}
+  const pending = f(1);
+  const r = @await(pending);
+}
+fn start() void { @coro_runtime_init(); @activate(T); }
+comptime { @bind_local_task(t, T); @export_symbol(start); }
+
+// -----
+
+const T = @get_local_task_id(10);
+async fn f(a: u16) u16 { return a + 1; }
+async task t() void {
+  // expected-error @+1 {{@await_parallel runs two or more async calls at the same time; to await a single call, use @await}}
+  const r = @await_parallel(f(1));
+}
+fn start() void { @coro_runtime_init(); @activate(T); }
+comptime { @bind_local_task(t, T); @export_symbol(start); }

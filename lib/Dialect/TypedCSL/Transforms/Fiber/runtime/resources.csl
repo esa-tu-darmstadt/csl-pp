@@ -1,0 +1,383 @@
+// Resource allocator for cooperative multitasking runtime.
+//
+// Provides bitmap-based allocation for hardware resources: colors, local
+// tasks, data tasks, control tasks, input queues, and output queues.
+//
+// ===== Resource model =====
+//
+// WSE-2 — unified task table
+//   Task table entries 0-28 (29, 30 system-reserved).
+//   Entries 0-23 are DUAL-USE: the same slot serves as a color (for data
+//   task routing) AND as a local/data task entry.  Claiming a color, a
+//   local task, or a data task in this range all consume the same slot.
+//   Entries 24-28 are local-task-only (no color routing).
+//
+//   Because colors ARE task entries on WSE-2, we track them with a single
+//   bitmap pair (task_entry_free).  color_free is unused (set to 0).
+//
+// WSE-3 — independent pools
+//   Colors 0-23:        tracked by color_free (independent of tasks).
+//   Task entries 8-28:  tracked by task_entry_free (bits 0-20, +8 offset).
+//   Data tasks:         mapped to input queues 0-7 (input_queue_free).
+//   Colors and task entries are fully independent.
+//
+// Both architectures
+//   Input queues 0-7:   input_queue_free.
+//   Output queues:      output_queue_free (6 on WSE-2, 8 on WSE-3).
+//   Control tasks 31-62: ctrl_task_free (lo/hi, +31 offset).
+//
+// ===== Bitmap convention =====
+//
+// Each pool uses u16 bitmaps where SET bits indicate FREE entries.
+// Claim uses CTZ to find the lowest free entry in O(1).
+// All bit operations are native 16-bit.
+//
+// Initial bitmap values mark all valid entries as free.  The compiler
+// adjusts these based on statically-bound (comptime-claimed) resources.
+
+param debug: bool = false;
+const print = if (debug) @import_module("<simprint>") else void;
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Count trailing zeros of a u16 value.
+/// Caller must ensure val != 0.
+/// Written as a shift-until-zero loop so LLVM's LoopIdiomRecognize
+/// folds it into a cttz intrinsic → native ctz instruction.
+inline fn ctz16(val: u16) u16 {
+    var count: u16 = 0;
+    while (val << count != 0) {
+        count += 1;
+    }
+    return 16 - count;
+}
+
+inline fn bit_clear(bm: *u16, idx: u16) void {
+    bm.* &= ~(@as(u16, 1) << idx);
+}
+
+inline fn bit_set(bm: *u16, idx: u16) void {
+    bm.* |= @as(u16, 1) << idx;
+}
+
+/// Halt the PE: every entry of a pool is claimed.  The compiler warns when it
+/// cannot prove that the worker tasks of @await_parallel suffice.
+inline fn halt_exhausted() void {
+    asm volatile ("hcf");
+}
+
+inline fn claim16(bm: *u16) u16 {
+    if (bm.* == 0) halt_exhausted();
+    const idx = ctz16(bm.*);
+    bit_clear(bm, idx);
+    return idx;
+}
+
+inline fn claim32(lo: *u16, hi: *u16) u16 {
+    if (lo.* != 0) return claim16(lo);
+    return claim16(hi) + 16;
+}
+
+/// Claim from a u16-pair, restricted to indices < limit.
+inline fn claim32_ranged(lo: *u16, hi: *u16, comptime limit: u16) u16 {
+    // Search lo half with range mask.
+    const lo_mask = if (limit >= 16) lo.* else (lo.* & ((@as(u16, 1) << limit) - 1));
+    if (lo_mask != 0) {
+        const idx = ctz16(lo_mask);
+        bit_clear(lo, idx);
+        return idx;
+    }
+    // Search hi half if limit extends past 16.
+    if (limit > 16) {
+        const hi_limit = limit - 16;
+        const hi_mask = hi.* & ((@as(u16, 1) << hi_limit) - 1);
+        if (hi_mask == 0) halt_exhausted();
+        const idx = ctz16(hi_mask);
+        bit_clear(hi, idx);
+        return idx + 16;
+    }
+    halt_exhausted();
+    unreachable;
+}
+
+inline fn release32(lo: *u16, hi: *u16, idx: u16) void {
+    if (idx < 16) {
+        bit_set(lo, idx);
+    } else {
+        bit_set(hi, idx - 16);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pool state
+// ---------------------------------------------------------------------------
+
+// Colors 0-23.  WSE-3 only; set to 0 on WSE-2 (colors tracked via
+// task_entry_free).
+export var color_free_lo: u16 = if (@is_arch("wse2")) 0 else 0xFFFF;
+export var color_free_hi: u16 = if (@is_arch("wse2")) 0 else 0x00FF;
+
+// Task table entries.
+//   WSE-2: entries 0-28 (also covers colors 0-23).
+//   WSE-3: entries 0-20 (mapped to IDs 8-28 via +8 offset).
+export var task_entry_free_lo: u16 = 0xFFFF;
+export var task_entry_free_hi: u16 = if (@is_arch("wse2")) 0x1FFF else 0x001F;
+
+// Input queues: 8 entries (0-7).
+export var input_queue_free: u16 = 0xFF;
+
+// Output queues: 6 on WSE-2, 8 on WSE-3.
+export var output_queue_free: u16 = if (@is_arch("wse2")) 0x3F else 0xFF;
+
+// Control tasks: entries 31-62 (32 entries, +31 offset).
+export var ctrl_task_free_lo: u16 = 0xFFFF; // entries 31-46
+export var ctrl_task_free_hi: u16 = 0xFFFF; // entries 47-62
+
+// ---------------------------------------------------------------------------
+// Colors (0-23)
+//
+// WSE-2: claim from task_entry_free (entries 0-23 are colors).
+// WSE-3: claim from color_free (independent of task entries).
+// ---------------------------------------------------------------------------
+
+export fn claim_color() u16 {
+    if (@is_arch("wse2")) {
+        // Colors ARE task entries 0-23 on WSE-2.
+        const id = claim32_ranged(&task_entry_free_lo, &task_entry_free_hi, 24);
+        if (debug) {
+            print.print_string("res: claim_color=");
+            print.print_u16_decimal(id);
+            print.print_string("\n");
+        }
+        return id;
+    } else {
+        const id = claim32(&color_free_lo, &color_free_hi);
+        if (debug) {
+            print.print_string("res: claim_color=");
+            print.print_u16_decimal(id);
+            print.print_string("\n");
+        }
+        return id;
+    }
+}
+
+export fn release_color(id: u16) void {
+    if (@is_arch("wse2")) {
+        // Colors ARE task entries on WSE-2.
+        release32(&task_entry_free_lo, &task_entry_free_hi, id);
+    } else {
+        release32(&color_free_lo, &color_free_hi, id);
+    }
+    if (debug) {
+        print.print_string("res: release_color=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local tasks
+// WSE-2: 0-28 from task_entry_free (0-23 also usable as colors).
+// WSE-3: 8-28 from task_entry_free (bits 0-20, +8 offset).
+// ---------------------------------------------------------------------------
+
+export fn claim_local_task() u16 {
+    if (@is_arch("wse2")) {
+        const id = claim32(&task_entry_free_lo, &task_entry_free_hi);
+        if (debug) {
+            print.print_string("res: claim_local_task=");
+            print.print_u16_decimal(id);
+            print.print_string("\n");
+        }
+        return id;
+    } else {
+        const id = claim32(&task_entry_free_lo, &task_entry_free_hi) + 8;
+        if (debug) {
+            print.print_string("res: claim_local_task=");
+            print.print_u16_decimal(id);
+            print.print_string("\n");
+        }
+        return id;
+    }
+}
+
+export fn release_local_task(id: u16) void {
+    if (@is_arch("wse2")) {
+        release32(&task_entry_free_lo, &task_entry_free_hi, id);
+    } else {
+        release32(&task_entry_free_lo, &task_entry_free_hi, id - 8);
+    }
+    if (debug) {
+        print.print_string("res: release_local_task=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Data tasks
+//
+// WSE-2: data task = task entry 0-23 (same slot as color + local task).
+//        Claim from task_entry_free, restricted to 0-23.
+//        Returns the shared index.
+//
+// WSE-3: data task = input queue 0-7.
+//        Color is allocated separately by the caller.
+//        Returns the input queue index.
+// ---------------------------------------------------------------------------
+
+export fn claim_data_task() u16 {
+    if (@is_arch("wse2")) {
+        // Data tasks occupy entries 0-23 (same as colors).
+        const id = claim32_ranged(&task_entry_free_lo, &task_entry_free_hi, 24);
+        if (debug) {
+            print.print_string("res: claim_data_task=");
+            print.print_u16_decimal(id);
+            print.print_string("\n");
+        }
+        return id;
+    } else {
+        const id = claim16(&input_queue_free);
+        if (debug) {
+            print.print_string("res: claim_data_task(iq)=");
+            print.print_u16_decimal(id);
+            print.print_string("\n");
+        }
+        return id;
+    }
+}
+
+export fn release_data_task(id: u16) void {
+    if (@is_arch("wse2")) {
+        release32(&task_entry_free_lo, &task_entry_free_hi, id);
+    } else {
+        bit_set(&input_queue_free, id);
+    }
+    if (debug) {
+        print.print_string("res: release_data_task=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Input queues (0-7)
+// On WSE-3, input queues are also consumed by claim_data_task.
+// This function is for claiming a queue independently.
+// ---------------------------------------------------------------------------
+
+export fn claim_input_queue() u16 {
+    const id = claim16(&input_queue_free);
+    if (debug) {
+        print.print_string("res: claim_input_queue=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+    return id;
+}
+
+export fn release_input_queue(id: u16) void {
+    bit_set(&input_queue_free, id);
+    if (debug) {
+        print.print_string("res: release_input_queue=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Control tasks (entries 31-62)
+// ---------------------------------------------------------------------------
+
+export fn claim_control_task() u16 {
+    const id = claim32(&ctrl_task_free_lo, &ctrl_task_free_hi) + 31;
+    if (debug) {
+        print.print_string("res: claim_ctrl_task=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+    return id;
+}
+
+export fn release_control_task(id: u16) void {
+    release32(&ctrl_task_free_lo, &ctrl_task_free_hi, id - 31);
+    if (debug) {
+        print.print_string("res: release_ctrl_task=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Output queues (0-5 on WSE-2, 0-7 on WSE-3)
+// ---------------------------------------------------------------------------
+
+export fn claim_output_queue() u16 {
+    const id = claim16(&output_queue_free);
+    if (debug) {
+        print.print_string("res: claim_output_queue=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+    return id;
+}
+
+export fn release_output_queue(id: u16) void {
+    bit_set(&output_queue_free, id);
+    if (debug) {
+        print.print_string("res: release_output_queue=");
+        print.print_u16_decimal(id);
+        print.print_string("\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free counts (@count_free)
+// ---------------------------------------------------------------------------
+
+/// The number of set bits of `val`.
+inline fn popcount16(val: u16) u16 {
+    var bits: u16 = val;
+    var count: u16 = 0;
+    while (bits != 0) {
+        bits &= bits - 1;
+        count += 1;
+    }
+    return count;
+}
+
+export fn count_free_colors() u16 {
+    if (@is_arch("wse2")) {
+        // Colors ARE task entries 0-23 on WSE-2.
+        return popcount16(task_entry_free_lo)
+            + popcount16(task_entry_free_hi & 0x00FF);
+    }
+    return popcount16(color_free_lo) + popcount16(color_free_hi);
+}
+
+export fn count_free_local_tasks() u16 {
+    return popcount16(task_entry_free_lo) + popcount16(task_entry_free_hi);
+}
+
+export fn count_free_data_tasks() u16 {
+    if (@is_arch("wse2")) {
+        // Data tasks are task entries 0-23 on WSE-2.
+        return popcount16(task_entry_free_lo)
+            + popcount16(task_entry_free_hi & 0x00FF);
+    }
+    return popcount16(input_queue_free);
+}
+
+export fn count_free_input_queues() u16 {
+    return popcount16(input_queue_free);
+}
+
+export fn count_free_output_queues() u16 {
+    return popcount16(output_queue_free);
+}
+
+export fn count_free_control_tasks() u16 {
+    return popcount16(ctrl_task_free_lo) + popcount16(ctrl_task_free_hi);
+}

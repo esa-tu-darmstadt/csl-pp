@@ -1,0 +1,48 @@
+// Layout of the conjugate gradient solver: a rectangle of width x height
+// PEs, each holding MAX_ZDIM points of the grid.
+param width: i16;
+param height: i16;
+param MAX_ZDIM: i16;        // points of the grid per PE
+param BLOCK_SIZE: i16 = 2;  // points the stencil exchanges with a neighbor at a time
+
+// region: imports
+// The libraries claim the colors they route. Each import is an instance
+// with colors of its own.
+const stencil = @import_module("stencil_3d_7pts/layout.csl", .{
+  .width = width,
+  .height = height,
+});
+const reduce = @import_module("allreduce/layout.csl", .{
+  .width = width,
+  .height = height,
+});
+// endregion
+
+const memcpy = @import_module("<memcpy/get_params>", .{
+  .width = width,
+  .height = height,
+});
+
+layout {
+  @set_rectangle(width, height);
+
+  // region: tiles
+  for (@range(i16, height)) |py| {
+    for (@range(i16, width)) |px| {
+      @set_tile_code(px, py, "pe.csl", .{
+        .memcpy_params = memcpy.get_params(px),
+        .stencil_params = stencil.get_params(px, py),
+        .reduce_params = reduce.get_params(px, py),
+        .MAX_ZDIM = MAX_ZDIM,
+        .BLOCK_SIZE = BLOCK_SIZE,
+      });
+    }
+  }
+  // endregion
+
+  @export_name("b", [*]f32, true);
+  @export_name("x", [*]f32, true);
+  @export_name("stencil_coeff", [*]f32, true);
+  @export_name("rho", [*]f32, true);
+  @export_name("solve", fn(i16, f32, i16) void);
+}

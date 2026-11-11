@@ -1,0 +1,7 @@
+# Platform baselines for binary packages. A distro value fixes the glibc and
+# system libraries a package may require, so binaries built for one baseline
+# never resolve for another. The null entry keeps profiles without a distro
+# valid.
+os:
+  Linux:
+    distro: [null, "rhel8"]

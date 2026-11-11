@@ -1,0 +1,32 @@
+// RUN: csl-s2s %s --params=DIM:4,SCALE:2,DIM_WITH_DEFAULT:42 --verify-diagnostics
+
+// =============================================================================
+// Test --params CLI option for passing parameter bindings
+// =============================================================================
+
+param DIM : i32;
+param SCALE : i32;
+
+// Default value, no binding provided — uses the default.
+param OFFSET : i32 = 10;
+
+// Default value overridden by binding.
+param DIM_WITH_DEFAULT : i32 = 999;
+
+comptime {
+  // expected-remark @+1 {{4}}
+  @comptime_print(DIM);
+
+  // expected-remark @+1 {{2}}
+  @comptime_print(SCALE);
+
+  // expected-remark @+1 {{8}}
+  @comptime_print(DIM * SCALE);
+
+  // expected-remark @+1 {{10}}
+  @comptime_print(OFFSET);
+
+  // Binding overrides default: 42, not 999.
+  // expected-remark @+1 {{42}}
+  @comptime_print(DIM_WITH_DEFAULT);
+}

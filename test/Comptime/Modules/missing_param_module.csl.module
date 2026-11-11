@@ -1,0 +1,13 @@
+// Module for testing missing param binding behavior
+// This module declares FACTOR, OFFSET, and UNUSED but tests only provide FACTOR.
+// OFFSET is used in compute(), so it triggers a comptime error when called.
+// UNUSED is never referenced, so it stays silent.
+
+param FACTOR : i32;
+// expected-error @+1 {{param 'OFFSET' has no binding or default value provided}}
+param OFFSET : i32;
+param UNUSED : i32;
+
+fn compute(x: i32) i32 {
+  return x * FACTOR + OFFSET;
+}

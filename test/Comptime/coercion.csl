@@ -1,0 +1,242 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Comptime int coerces to runtime i32
+// =============================================================================
+
+comptime {
+  const runtime_val: i32 = 10;
+  // 42 is comptime_int, coerces to i32
+  // expected-remark @+1 {{52}}
+  @comptime_print(42 + runtime_val);
+  // expected-remark @+1 {{i32}}
+  @comptime_print(@type_of(42 + runtime_val));
+}
+
+// -----
+
+// =============================================================================
+// Comptime int coerces to runtime i32 (reverse order)
+// =============================================================================
+
+comptime {
+  const runtime_val: i32 = 100;
+  // expected-remark @+1 {{123}}
+  @comptime_print(runtime_val + 23);
+  // expected-remark @+1 {{i32}}
+  @comptime_print(@type_of(runtime_val + 23));
+}
+
+// -----
+
+// =============================================================================
+// Comptime int coerces to runtime i8
+// =============================================================================
+
+comptime {
+  const runtime_val: i8 = 10;
+  // expected-remark @+1 {{15}}
+  @comptime_print(5 + runtime_val);
+  // expected-remark @+1 {{i8}}
+  @comptime_print(@type_of(5 + runtime_val));
+}
+
+// -----
+
+// =============================================================================
+// Comptime int coerces to runtime u32
+// =============================================================================
+
+comptime {
+  const runtime_val: u32 = 20;
+  // expected-remark @+1 {{30}}
+  @comptime_print(10 + runtime_val);
+  // expected-remark @+1 {{u32}}
+  @comptime_print(@type_of(10 + runtime_val));
+}
+
+// -----
+
+// =============================================================================
+// Comptime int multiplication with coercion
+// =============================================================================
+
+comptime {
+  const runtime_val: i8 = 10;
+  // expected-remark @+1 {{50}}
+  @comptime_print(5 * runtime_val);
+  // expected-remark @+1 {{i8}}
+  @comptime_print(@type_of(5 * runtime_val));
+}
+
+// -----
+
+// =============================================================================
+// Comptime int comparison with coercion - result type is bool
+// =============================================================================
+
+comptime {
+  const runtime_val: i32 = 42;
+  // expected-remark @+1 {{true}}
+  @comptime_print(10 < runtime_val);
+  // expected-remark @+1 {{bool}}
+  @comptime_print(@type_of(10 < runtime_val));
+}
+
+// -----
+
+// =============================================================================
+// Comptime float coerces to runtime f32
+// =============================================================================
+
+comptime {
+  const runtime_val: f32 = 2.5;
+  // expected-remark @+1 {{5.5}}
+  @comptime_print(3.0 + runtime_val);
+  // expected-remark @+1 {{f32}}
+  @comptime_print(@type_of(3.0 + runtime_val));
+}
+
+// -----
+
+// =============================================================================
+// Comptime int overflow during coercion
+// =============================================================================
+
+comptime {
+  const runtime_val: i8 = 10;
+  // 200 doesn't fit in i8 (-128 to 127)
+  // expected-error @+1 {{comptime_int value 200 does not fit in i8}}
+  const result = 200 + runtime_val;
+}
+
+// -----
+
+// =============================================================================
+// Negative comptime int to unsigned coercion fails
+// =============================================================================
+
+comptime {
+  const runtime_val: u32 = 20;
+  // Negative comptime_int cannot coerce to unsigned
+  // expected-error @+1 {{comptime_int value -10 does not fit in u32}}
+  const result = -10 + runtime_val;
+}
+
+// -----
+
+// =============================================================================
+// Different runtime integer widths - incompatible
+// =============================================================================
+
+comptime {
+  const a: i32 = 42;
+  const b: i16 = 10;
+  // expected-error @+1 {{incompatible types for binary operation: i32 and i16}}
+  const result = a + b;
+}
+
+// -----
+
+// =============================================================================
+// Different runtime integer signedness - incompatible
+// =============================================================================
+
+comptime {
+  const a: i32 = 42;
+  const b: u32 = 10;
+  // expected-error @+1 {{incompatible types for binary operation: i32 and u32}}
+  const result = a + b;
+}
+
+// -----
+
+// =============================================================================
+// Runtime float + runtime int - incompatible
+// =============================================================================
+
+comptime {
+  const a: f32 = 3.14;
+  const b: i32 = 42;
+  // expected-error @+1 {{incompatible types for binary operation: f32 and i32}}
+  const result = a + b;
+}
+
+// -----
+
+// =============================================================================
+// Different runtime float kinds - incompatible
+// =============================================================================
+
+comptime {
+  const a: f32 = 3.14;
+  const b: f16 = 2.0;
+  // expected-error @+1 {{incompatible types for binary operation: f32 and f16}}
+  const result = a + b;
+}
+
+// -----
+
+// =============================================================================
+// Comptime int + runtime float - incompatible (cross-kind)
+// =============================================================================
+
+comptime {
+  const runtime_val: f32 = 3.14;
+  // comptime_int cannot coerce to float
+  // expected-error @+1 {{incompatible types for binary operation: comptime_int and f32}}
+  const result = 42 + runtime_val;
+}
+
+// -----
+
+// =============================================================================
+// Variable initialization coercion: comptime_int to typed
+// =============================================================================
+
+comptime {
+  // comptime_int 42 should coerce to i32
+  var x: i32 = 42;
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+  // expected-remark @+1 {{i32}}
+  @comptime_print(@type_of(x));
+
+  // comptime_int 255 should coerce to u8
+  var y: u8 = 255;
+  // expected-remark @+1 {{255}}
+  @comptime_print(y);
+  // expected-remark @+1 {{u8}}
+  @comptime_print(@type_of(y));
+}
+
+// -----
+
+// =============================================================================
+// Variable initialization coercion: comptime_float to typed f32
+// =============================================================================
+
+comptime {
+  var x: f32 = 3.14;
+  // expected-remark @+1 {{3.1400001}}
+  @comptime_print(x);
+  // expected-remark @+1 {{f32}}
+  @comptime_print(@type_of(x));
+}
+
+// -----
+
+// =============================================================================
+// Select expression with mixed types coerces
+// =============================================================================
+
+comptime {
+  const cond = true;
+  const runtime_val: i32 = 42;
+  // 10 is comptime_int, should coerce to i32 to match runtime_val
+  const result = if (cond) runtime_val else 10;
+  // expected-remark @+1 {{42}}
+  @comptime_print(result);
+  // expected-remark @+1 {{i32}}
+  @comptime_print(@type_of(result));
+}

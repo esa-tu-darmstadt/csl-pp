@@ -1,0 +1,19 @@
+# Weekly updates of the pinned GitHub Actions and of the pinned Python tools of
+# the build and the release. Updates of a kind are grouped into one pull
+# request.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directories: [/conan, /packaging]
+    schedule:
+      interval: weekly
+    groups:
+      python-tools:
+        patterns: ["*"]

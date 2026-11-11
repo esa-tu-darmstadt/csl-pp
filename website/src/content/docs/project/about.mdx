@@ -1,0 +1,40 @@
+---
+title: About
+description: Who develops csl++, and where to report problems.
+sidebar:
+  order: 1
+---
+
+csl++ is developed by the Embedded Systems and Applications group at TU Darmstadt. It is not a product of Cerebras Systems; CSL, `cslc` and the Cerebras SDK are.
+
+csl++ is under the Apache License v2.0 with LLVM Exceptions, the license of LLVM.
+
+## Publication
+
+The design of the async extension and of its stackful lowering is described in the paper *Structured Coroutines for the Wafer-Scale Engine*, which has been accepted for publication at CGO 2027, the International Symposium on Code Generation and Optimization, held in Salt Lake City, Utah, USA, from 20 to 24 March 2027 together with HPCA, PPoPP and CC. The paper is not published yet; we look forward to presenting it there.
+
+Until the proceedings appear, cite it as:
+
+```bibtex
+@inproceedings{noack2027coroutines,
+  title     = {Structured Coroutines for the Wafer-Scale Engine},
+  author    = {Tim Noack and Andreas Koch},
+  booktitle = {Proceedings of the 2027 IEEE/ACM International Symposium on
+               Code Generation and Optimization (CGO '27)},
+  year      = {2027},
+  address   = {Salt Lake City, UT, USA},
+  note      = {To appear}
+}
+```
+
+[Stackful coroutines in CSL](../../internals/coroutines/) describes the design on this site.
+
+## Reporting problems
+
+Report bugs and questions in the [issue tracker](https://github.com/esa-tu-darmstadt/csl-pp/issues) of the repository. Report security vulnerabilities privately, as described in `SECURITY.md` of the repository. For a wrong result or a crash, include:
+
+- the version of the Cerebras SDK and the target architecture;
+- the `csl-pp` command line;
+- a small program that shows the problem, ideally one PE program and its layout file.
+
+`csl-pp` is intended to report every error that `cslc` reports. If `cslc` reports an error for a program that `csl-pp` accepted, please report it as a bug.

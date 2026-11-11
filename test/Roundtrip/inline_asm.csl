@@ -1,0 +1,88 @@
+// RUN: csl-s2s %s --split-input-file -verify-diagnostics | FileCheck %s
+
+// =============================================================================
+// Basic inline asm with outputs, inputs, and clobbers
+// =============================================================================
+
+// CHECK: export fn test_asm(param0: u16, param1: u16) u16 {
+// CHECK:     var ret: u16 = @as(u16, 0);
+// CHECK:     asm volatile ("mov16 %[retval] = %[argval1]"
+// CHECK:         : [retval] "=r" (ret)
+// CHECK:         : [argval1] "r" (param0)
+// CHECK:         : "r6"
+// CHECK:     );
+// CHECK: }
+export fn test_asm(x: u16, y: u16) u16 {
+    var ret: u16 = 0;
+    asm volatile ("mov16 %[retval] = %[argval1]"
+        : [retval] "=r" (ret)
+        : [argval1] "r" (x)
+        : "r6"
+    );
+    return ret;
+}
+
+// -----
+
+// =============================================================================
+// Asm with only instructions (no outputs, inputs, or clobbers)
+// =============================================================================
+
+// CHECK: export fn test_asm_simple() void {
+// CHECK:     asm ("nop");
+// CHECK: }
+export fn test_asm_simple() void {
+    asm ("nop");
+}
+
+// -----
+
+// =============================================================================
+// Asm with multiple outputs and inputs
+// =============================================================================
+
+// CHECK: export fn test_asm_multi(param0: u16, param1: u16) u16 {
+// CHECK:     var a: u16 = @as(u16, 0);
+// CHECK:     var b: u16 = @as(u16, 0);
+// CHECK:     asm ("mov16 %[out1] = %[in1]; mov16 %[out2] = %[in2]"
+// CHECK:         : [out1] "=r" (a), [out2] "=r" (b)
+// CHECK:         : [in1] "r" (param0), [in2] "r" (param1)
+// CHECK:     );
+// CHECK: }
+export fn test_asm_multi(x: u16, y: u16) u16 {
+    var a: u16 = 0;
+    var b: u16 = 0;
+    asm ("mov16 %[out1] = %[in1]; mov16 %[out2] = %[in2]"
+        : [out1] "=r" (a), [out2] "=r" (b)
+        : [in1] "r" (x), [in2] "r" (y)
+    );
+    return a;
+}
+
+// -----
+
+// =============================================================================
+// Asm with computed expressions (@strcat for instructions)
+// =============================================================================
+
+// CHECK: export fn test_asm_strcat(param0: i16, param1: i16) i16 {
+// CHECK:     var ret: i16 = @as(i16, 0);
+// CHECK:     asm ("mov16 r6 = %[argval1]\nadd16 r6 = r6, %[argval2]\nadd16 r6 = r6, r6\nmov16 %[retval] = r6"
+// CHECK:         : [retval] "=r" (ret)
+// CHECK:         : [argval1] "{r2}" (param0), [argval2] "==[retval]" (param1)
+// CHECK:         : "r6"
+// CHECK:     );
+// CHECK: }
+export fn test_asm_strcat(x: i16, y: i16) i16 {
+    var ret: i16 = 0;
+    asm (
+        @strcat("mov16 r6 = %[argval1]\n",
+                "add16 r6 = r6, %[argval2]\n",
+                "add16 r6 = r6, r6\n",
+                "mov16 %[retval] = r6")
+        : [retval] "=r" (ret)
+        : [argval1] "{r2}" (x), [argval2] "==[retval]" (y)
+        : "r6"
+    );
+    return ret;
+}

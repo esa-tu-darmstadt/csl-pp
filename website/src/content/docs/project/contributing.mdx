@@ -1,0 +1,93 @@
+---
+title: Contributing
+description: Building csl++ from source, running the tests, and the layout of the repository.
+sidebar:
+  order: 2
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+## Repository
+
+| Directory | Content |
+| --- | --- |
+| `lib/Target/CSL/Parser3/` | The parser. |
+| `lib/Dialect/ParsedCSL/` | The untyped representation and comptime evaluation. |
+| `lib/Conversion/ParsedCSLToTypedCSL/` | The lowering to the typed representation. |
+| `lib/Dialect/TypedCSL/` | The typed representation, async lowering and the async runtime. |
+| `lib/Target/CSL/EmitCSL/` | The emission of CSL. |
+| `tools/` | `csl-pp`, the language server and developer tools. |
+| `csl-libs/` | The csl++ libraries; see [Libraries](../../libraries/). |
+| `editors/vscode/` | The VS Code extension. |
+| `conan/` | Conan recipes for csl++ and its dependencies, and the profiles of continuous integration. |
+| `packaging/` | The Python package published on PyPI. |
+| `test/` | Regression tests; `test/Integration/` runs programs in the simulator. |
+| `website/` | This website. |
+
+## Building from source
+
+csl++ is built with CMake and Conan. The build fetches and builds its own copy of LLVM, so it needs no LLVM installation; `docs/Building.md` in the repository describes the build and the pinning of dependencies in detail.
+
+Requirements: Linux on x86-64, a C++20 compiler, Python 3 and Git. Continuous integration builds on AlmaLinux 8 with GCC 15.
+
+<Steps>
+
+1. Get the source and the Python packages for the build:
+
+   ```bash
+   git clone https://github.com/esa-tu-darmstadt/csl-pp.git
+   cd csl-pp
+   python3 -m venv .venv
+   . .venv/bin/activate
+   python3 -m pip install -r conan/requirements.txt
+   conan config install conan/config
+   ```
+
+2. Build. The first build compiles LLVM, which takes considerably longer than csl++ itself; later builds reuse it.
+
+   ```bash
+   conan profile detect
+   python3 scripts/conan-build.py install --build=missing -pr:a default -s:a compiler.cppstd=20
+   python3 scripts/conan-build.py build -pr:a default -s:a compiler.cppstd=20
+   ```
+
+   With GCC 15 first on `PATH`, `-pr:a rhel8-gcc15` selects the profile that continuous integration uses instead.
+
+3. Install `csl-pp` and the files it needs into a directory of your choice:
+
+   ```bash
+   cmake --install build/Release --prefix ~/csl++
+   export PATH=~/csl++/bin:$PATH
+   ```
+
+   `csl-pp` expects `lib/libinject_mllvm.so` next to its `bin` directory and finds the libraries in `share/csl-mlir/libs` of the installation; keep the three together if you copy them elsewhere. A `csl-pp` run from the build directory needs the `csl-libs` directory of the repository with `--import-path`.
+
+</Steps>
+
+[Installation](../../start/installation/) describes how `csl-pp` finds the Cerebras SDK.
+
+## Tests
+
+The regression tests need no SDK:
+
+```bash
+cmake --build build/Release --target check-csl
+```
+
+The integration tests compile and run the examples of the SDK, the ported benchmarks and the examples of this website in the simulator. They need the SDK; configure the build with `-DCSL_SDK_DIR=<sdk>` and `-DCSL_EXTRAS_DIR=<sdk>/csl-extras-<version>`, then run:
+
+```bash
+cmake --build build/Release --target check-csl-integration
+```
+
+## Website
+
+The website is built with [Starlight](https://starlight.astro.build):
+
+```bash
+cd website
+npm ci
+npm run dev
+```
+
+Code examples are complete programs in `website/examples/`, which the integration tests run. Pages show them, or parts of them and of the libraries marked with `// region: <name>` and `// endregion`, with the `Example` component.

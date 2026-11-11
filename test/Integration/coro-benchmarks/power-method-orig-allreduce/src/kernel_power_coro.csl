@@ -1,0 +1,125 @@
+// Hybrid: coroutine stencil + original callback-based allreduce.
+// Used to isolate performance impact of the coroutine allreduce vs stencil.
+
+param memcpyParams;
+param reduceParams;
+param stencilParams;
+param MAX_ZDIM: i16;
+param BLOCK_SIZE: i16;
+
+const STATE: local_task_id = @claim_local_task();
+
+const timestamp = @import_module("<time>");
+const math_lib = @import_module("<math>");
+const blas_lib = @import_module("blas.csl");
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
+
+// Original callback-based allreduce (needs f_callback and explicit task IDs)
+fn f_resume_coro() void {
+    @activate(STATE);
+}
+
+const reduce_mod = @import_module( "../../benchmark-libs-orig/allreduce/pe.csl", .{
+     .first_px = reduceParams.first_px,
+     .last_px = reduceParams.last_px,
+     .first_py = reduceParams.first_py,
+     .last_py = reduceParams.last_py,
+     .C_ROUTE = reduceParams.C_ROUTE,
+     .width = reduceParams.width,
+     .height = reduceParams.height,
+     .f_callback = f_resume_coro,
+     .queues = [1]u16{2},
+     .dest_dsr_ids = [1]u16{1},
+     .src0_dsr_ids = [1]u16{1},
+     .src1_dsr_ids = [1]u16{1}
+     });
+
+// Coroutine stencil (no explicit task IDs needed)
+const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", .{
+    .stencil_params = stencilParams,
+    .output_ut_id = 7,
+    .BLOCK_SIZE = BLOCK_SIZE,
+    .dsr_ids = [2]u16{2, 3},
+});
+
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+var x = @zeros([MAX_ZDIM]f32);
+var y = @zeros([MAX_ZDIM]f32);
+var stencil_coeff = @zeros([7]f32);
+var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
+var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
+var ptr_x: [*]f32 = &x;
+var ptr_y: [*]f32 = &y;
+var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
+var ptr_time_ref: [*]u16 = &time_ref_u16;
+var n: i16 = 0;
+var max_ite: i16 = 0;
+var do_sync: bool = false;
+
+fn f_enable_timer() void { timestamp.enable_tsc(); sys_mod.unblock_cmd_stream(); }
+fn f_tic() void { timestamp.get_timestamp(&tscStartBuffer); sys_mod.unblock_cmd_stream(); }
+fn f_toc() void { timestamp.get_timestamp(&tscEndBuffer); sys_mod.unblock_cmd_stream(); }
+fn f_memcpy_timestamps() void {
+    time_buf_u16[0] = tscStartBuffer[0]; time_buf_u16[1] = tscStartBuffer[1]; time_buf_u16[2] = tscStartBuffer[2];
+    time_buf_u16[3] = tscEndBuffer[0]; time_buf_u16[4] = tscEndBuffer[1]; time_buf_u16[5] = tscEndBuffer[2];
+    sys_mod.unblock_cmd_stream();
+}
+fn f_sync() void { do_sync = true; @activate(STATE); }
+fn f_power(size: i16, max_ite_val: i16) void { n = size; max_ite = max_ite_val; do_sync = false; @activate(STATE); }
+
+var nrm2_buf = @zeros([1]f32);
+
+async task f_state() void {
+    if (do_sync) {
+        var dot: f32 = 0.0;
+        // Original allreduce is callback-based: call, then suspend until f_resume_coro
+        reduce_mod.allreduce(1, @ptrcast([*]f32, &dot), reduce_mod.TYPE_BINARY_OP.ADD);
+        suspend;
+    } else {
+        var k: i16 = 0;
+        while (k < max_ite) : (k += 1) {
+            // y = A * x — coroutine stencil
+            @await(stencil_mod.spmv(n, &stencil_coeff, &x, &y));
+
+            // nrm2 = |y|_2 — original callback allreduce
+            nrm2_buf[0] = blas_lib.nrm2(n, &y);
+            reduce_mod.allreduce_nrm2(&nrm2_buf);
+            suspend;
+
+            const inv_nrm2 = math_lib.inv(nrm2_buf[0]);
+            var row: i16 = 0;
+            while (row < n) : (row += 1) { x[row] = y[row] * inv_nrm2; }
+        }
+    }
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_reference_timestamps() void {
+    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
+    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
+    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @bind_local_task(f_state, STATE);
+}
+
+fn f_init() void {
+    @coro_runtime_init();
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @export_symbol(ptr_x, "x"); @export_symbol(ptr_y, "y");
+    @export_symbol(ptr_stencil_coeff, "stencil_coeff");
+    @export_symbol(ptr_time_buf_u16, "time_buf_u16"); @export_symbol(ptr_time_ref, "time_ref");
+}
+comptime {
+    @export_symbol(f_enable_timer); @export_symbol(f_tic); @export_symbol(f_toc);
+    @export_symbol(f_memcpy_timestamps); @export_symbol(f_sync); @export_symbol(f_power);
+    @export_symbol(f_reference_timestamps);
+    @export_symbol(f_init);
+}

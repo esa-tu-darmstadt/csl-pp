@@ -1,0 +1,7 @@
+// Two tiles with different parameters: csl-pp compiles pe.csl twice.
+layout {
+  @set_rectangle(2, 1);
+  for (@range(i16, 2)) |x| {
+    @set_tile_code(x, 0, "pe.csl", .{ .limit = x });
+  }
+}

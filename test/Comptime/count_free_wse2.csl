@@ -1,0 +1,24 @@
+// RUN: csl-s2s %s -verify-diagnostics --count-tasks=false --arch=wse2
+//
+// On WSE-2, colors and data tasks are the task entries 0-23, which local
+// tasks use as well (see count_free.csl for WSE-3).
+
+comptime {
+  // expected-remark @+1 {{20}}
+  @comptime_print(@count_free(color));
+  // expected-remark @+1 {{23}}
+  @comptime_print(@count_free(local_task_id));
+  // expected-remark @+1 {{20}}
+  @comptime_print(@count_free(data_task_id));
+  // expected-remark @+1 {{6}}
+  @comptime_print(@count_free(input_queue));
+  // expected-remark @+1 {{4}}
+  @comptime_print(@count_free(output_queue));
+  // expected-remark @+1 {{27}}
+  @comptime_print(@count_free(control_task_id));
+
+  // A color takes a task entry, too.
+  const claimed = @claim_color();
+  // expected-remark @+1 {{22}}
+  @comptime_print(@count_free(local_task_id));
+}

@@ -1,0 +1,144 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Direction literals exist and can be compared
+// =============================================================================
+
+comptime {
+  const n = NORTH;
+  const s = SOUTH;
+  const e = EAST;
+  const w = WEST;
+  const r = RAMP;
+
+  // expected-remark @+1 {{true}}
+  @comptime_print(n == NORTH);
+  // expected-remark @+1 {{true}}
+  @comptime_print(s == SOUTH);
+  // expected-remark @+1 {{true}}
+  @comptime_print(e == EAST);
+  // expected-remark @+1 {{true}}
+  @comptime_print(w == WEST);
+  // expected-remark @+1 {{true}}
+  @comptime_print(r == RAMP);
+}
+
+// -----
+
+// =============================================================================
+// Direction inequality
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{false}}
+  @comptime_print(NORTH == SOUTH);
+  // expected-remark @+1 {{false}}
+  @comptime_print(EAST == WEST);
+  // expected-remark @+1 {{false}}
+  @comptime_print(NORTH == RAMP);
+  // expected-remark @+1 {{true}}
+  @comptime_print(NORTH != SOUTH);
+}
+
+// -----
+
+// =============================================================================
+// Direction in comptime if
+// =============================================================================
+
+comptime {
+  const d = EAST;
+  var result: comptime_int = 0;
+  if (d == NORTH) {
+    result = 1;
+  } else if (d == EAST) {
+    result = 2;
+  } else if (d == SOUTH) {
+    result = 3;
+  } else if (d == WEST) {
+    result = 4;
+  } else {
+    result = 5;
+  }
+  // expected-remark @+1 {{2}}
+  @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Direction type can be used in function signatures
+// =============================================================================
+
+fn rotate_clockwise(d: direction) direction {
+  if (d == NORTH) {
+    return EAST;
+  }
+  if (d == EAST) {
+    return SOUTH;
+  }
+  if (d == SOUTH) {
+    return WEST;
+  }
+  if (d == WEST) {
+    return NORTH;
+  }
+  return RAMP;
+}
+
+comptime {
+  // expected-remark @+1 {{EAST}}
+  @comptime_print(rotate_clockwise(NORTH));
+  // expected-remark @+1 {{SOUTH}}
+  @comptime_print(rotate_clockwise(EAST));
+  // expected-remark @+1 {{WEST}}
+  @comptime_print(rotate_clockwise(SOUTH));
+  // expected-remark @+1 {{NORTH}}
+  @comptime_print(rotate_clockwise(WEST));
+  // expected-remark @+1 {{RAMP}}
+  @comptime_print(rotate_clockwise(RAMP));
+}
+
+// -----
+
+// =============================================================================
+// Direction variables
+// =============================================================================
+
+fn flip_horizontal(d: direction) direction {
+  if (d == EAST) {
+    return WEST;
+  }
+  if (d == WEST) {
+    return EAST;
+  }
+  return d;
+}
+
+comptime {
+  var current: direction = EAST;
+  current = flip_horizontal(current);
+  // expected-remark @+1 {{WEST}}
+  @comptime_print(current);
+
+  current = flip_horizontal(current);
+  // expected-remark @+1 {{EAST}}
+  @comptime_print(current);
+}
+
+// -----
+
+// =============================================================================
+// Direction as comptime parameter
+// =============================================================================
+
+fn is_ramp(comptime d: direction) bool {
+  return d == RAMP;
+}
+
+comptime {
+  // expected-remark @+1 {{true}}
+  @comptime_print(is_ramp(RAMP));
+  // expected-remark @+1 {{false}}
+  @comptime_print(is_ramp(NORTH));
+}

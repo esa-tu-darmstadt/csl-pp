@@ -1,0 +1,111 @@
+---
+title: csl-pp
+description: What csl-pp does with a program, the files it writes, how it fits into build scripts, and its options.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`csl-pp` translates a layout file and the PE programs it references to vanilla CSL and runs `cslc` on the result:
+
+```bash
+csl-pp layout.csl --arch=wse3 --fabric-dims=11,3 --fabric-offsets=4,1 \
+  --params=width:4,N:8 -o out --memcpy --channels=1
+```
+
+It accepts the options of `cslc` and passes them on. Options that `csl-pp` does not know are passed to `cslc` unchanged.
+
+## Stages
+
+1. It parses the layout file and evaluates its comptime code, including the `--params`.
+2. For every `@set_tile_code` call, it compiles the PE program with the parameters of that call. Tiles with the same PE program and the same parameters share one compiled copy. In each copy, the parameters are comptime constants, and comptime code is evaluated with them.
+3. It writes each compiled PE program as a CSL file, and a layout file whose `@set_tile_code` calls refer to these files. Calls for a rectangle of tiles with the same file are written as a loop.
+4. It runs `cslc` on the generated layout file. Programs with async tasks usually need two `cslc` runs; see [Stack sizes](#stack-sizes).
+
+Errors in the layout file or a PE program are reported before `cslc` runs, at the line of the csl++ source. An error in a PE program is reported once, with a note that names a tile it was found for:
+
+```
+pe.csl:7:5: error: use of undeclared identifier 'cout'
+    cout += 1;
+    ^
+layout.csl:5:5: note: while compiling 'pe.csl' for tile (0, 0)
+    @set_tile_code(x, 0, "pe.csl", .{ .limit = x });
+    ^
+```
+
+## Output files
+
+`csl-pp` writes the generated CSL to a temporary directory, or to the directory given with `--work-dir`. It contains:
+
+| File | Content |
+| --- | --- |
+| The layout file, under its original name | The layout, with `@set_tile_code` calls that refer to the files below. |
+| `<name>__<hash>.csl` | One PE program per distinct combination of PE program and parameters. |
+| `cslc-measure-stacks.log` | The output of the first `cslc` run, if there were two. |
+
+`-o` names the output directory of `cslc`, as with `cslc` itself. It contains the ELF files and `out.json`. `out.json` lists the `--params`, as host programs expect.
+
+`--no-cslc` stops after writing the CSL files and prints the `cslc` command line that `csl-pp` would run.
+
+## Stack sizes
+
+Each async task runs on a stack in a global variable, and `csl-pp` sizes it from the stack frames that `cslc` generates. For a program with async tasks, `csl-pp` therefore runs `cslc` twice: the first run measures the frame sizes, the second compiles the program with stacks of the measured sizes. Only the output of the second run is shown, unless the first one fails or `--verbose` is given.
+
+With `--no-cslc`, the stacks in the generated CSL have placeholder sizes, and `csl-pp` warns about it.
+
+If every async task and every async function called with `@await_parallel` declares its stack size with [`stack_size(N)`](../../language/stacks/#stack_sizen), `csl-pp` uses these sizes, runs `cslc` only once, and the CSL of `--no-cslc` is complete.
+
+## Build scripts
+
+Build scripts of the SDK examples call `cslc`. Replace `cslc` with `csl-pp`, or put a script named `cslc` before the SDK directory on your `PATH` that calls `csl-pp` with the SDK's `cslc`:
+
+```bash
+#!/bin/bash
+exec csl-pp --cslc="$HOME/cerebras-sdk/cslc" "$@"
+```
+
+<Aside type="caution">
+`--cslc` is required in this script. Without it, `csl-pp` finds the script itself as `cslc`.
+</Aside>
+
+Options that every run needs, such as `--cslc`, can be set once in the `CSL_FLAGS` environment variable.
+
+## Options passed to cslc
+
+`csl-pp` uses these options itself and passes them to `cslc`. They have the same meaning as for `cslc`.
+
+| Option | Meaning |
+| --- | --- |
+| `-o <dir>` | Output directory of `cslc`. Default: `out`. |
+| `--arch=wse2\|wse3` | Target architecture. Default: `wse2`. |
+| `--fabric-dims=<w>,<h>` | Dimensions of the fabric. |
+| `--fabric-offsets=<x>,<y>` | Offset of the program rectangle in the fabric. |
+| `--params=<name>:<value>,...` | Values of `param` declarations of the layout file. Can be repeated. |
+| `--colors=<name>:<value>,...` | Values of `param` declarations of type `color`. Can be repeated. |
+| `--import-path=<dir>` | Directory to search for imported modules. Can be repeated. After these directories, an installed `csl-pp` searches the [libraries](../../libraries/) of its installation. |
+| `--memcpy` | Use the memcpy infrastructure. |
+| `--channels=<n>` | Number of memcpy channels. |
+| `--width-west-buf=<n>`, `--width-east-buf=<n>` | Width of the memcpy buffers. |
+| `--fp16-format=f16\|bf16\|cb16` | Format of `f16`. Default: `f16`. |
+| `--verbose` | Verbose output of `cslc`. `csl-pp` also prints the `cslc` command lines and the output of the first `cslc` run. |
+
+## Options of csl-pp
+
+This table lists the options for users. `csl-pp --help-hidden` lists all, including options for the development of `csl-pp`.
+
+| Option | Meaning |
+| --- | --- |
+| `--cslc=<path>` | The `cslc` to run. Default: `cslc` on the `PATH`. |
+| `--system-module-sif=<file>` | The SDK image (`*.sif`) to read system modules such as `<memcpy/memcpy>` from. Default: the only `*.sif` file in the directory of `cslc`. |
+| `--system-import-path=<dir>` | Directory with the system modules, instead of the image; with an image, the directory within the image. Can be repeated. |
+| `--work-dir=<dir>` | Directory for the generated CSL. Default: a new temporary directory. |
+| `--no-cslc` | Write the generated CSL, print the `cslc` command line, and do not run `cslc`. |
+| `--num-threads=<n>` | Number of PE programs compiled at the same time. Default: `0`, the number of cores. |
+| `--count-tasks` | Print how many task IDs of each kind each PE program uses. |
+| `--version` | Print the csl++ release that `csl-pp` belongs to, its commit and the LLVM version. |
+
+## Environment variables
+
+| Variable | Meaning |
+| --- | --- |
+| `CSL_FLAGS` | Options read before the command line, e.g. `--cslc=... --import-path=...`. Options on the command line take precedence. |
+| `CSL_INJECT_MLLVM_VERBOSE` | If set, `libinject_mllvm.so` reports in which `cslc` processes it is active. |

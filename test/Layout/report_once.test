@@ -1,0 +1,10 @@
+// RUN: not csl-pp %S/Inputs/report_once/layout.csl --no-cslc --work-dir=%t \
+// RUN:   2>&1 | FileCheck %s
+//
+// An error in a PE program is reported once, not once for every set of
+// @set_tile_code parameters it is compiled with, and names the tile it was
+// found for.
+
+// CHECK:      pe.csl:7:5: error: use of undeclared identifier 'cout'
+// CHECK:      layout.csl:5:5: note: while compiling 'pe.csl' for tile (0, 0)
+// CHECK-NOT:  error:

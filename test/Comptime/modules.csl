@@ -1,0 +1,225 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic module import and const access
+// =============================================================================
+
+const m = @import_module("Modules/simple_module.csl.module");
+
+comptime {
+  // expected-remark @+1 {{42}}
+  @comptime_print(m.MODULE_CONST);
+}
+
+// -----
+
+// =============================================================================
+// Module function call
+// =============================================================================
+
+const mod = @import_module("Modules/simple_module.csl.module");
+
+comptime {
+  // expected-remark @+1 {{30}}
+  @comptime_print(mod.module_add(10, 20));
+}
+
+// -----
+
+// =============================================================================
+// Chained module function calls
+// =============================================================================
+
+const mod2 = @import_module("Modules/simple_module.csl.module");
+
+comptime {
+  // expected-remark @+1 {{20}}
+  @comptime_print(mod2.module_double(10));
+  // expected-remark @+1 {{60}}
+  @comptime_print(mod2.module_double(mod2.module_add(10, 20)));
+}
+
+// -----
+
+// =============================================================================
+// Module const in expression
+// =============================================================================
+
+const mod3 = @import_module("Modules/simple_module.csl.module");
+
+comptime {
+  const x = mod3.MODULE_CONST + 8;
+  // expected-remark @+1 {{50}}
+  @comptime_print(x);
+}
+
+// -----
+
+// =============================================================================
+// Multiple module imports
+// =============================================================================
+
+const first = @import_module("Modules/simple_module.csl.module");
+const second = @import_module("Modules/simple_module.csl.module");
+
+comptime {
+  // expected-remark @+1 {{84}}
+  @comptime_print(first.MODULE_CONST + second.MODULE_CONST);
+}
+
+// -----
+
+// =============================================================================
+// Module function calling another module function
+// =============================================================================
+
+const mod = @import_module("Modules/simple_module.csl.module");
+
+comptime {
+  // expected-remark @+1 {{52}}
+  @comptime_print(mod.module_inner_call(10));
+}
+
+// -----
+
+// =============================================================================
+// Module with param bindings
+// =============================================================================
+
+const pm = @import_module("Modules/param_module.csl.module", .{ .FACTOR = 2, .OFFSET = 10 });
+
+comptime {
+  // 10 * 2 + 10 = 30
+  // expected-remark @+1 {{30}}
+  @comptime_print(pm.compute(10));
+
+  // expected-remark @+1 {{2}}
+  @comptime_print(pm.get_factor());
+
+  // expected-remark @+1 {{10}}
+  @comptime_print(pm.get_offset());
+}
+
+// -----
+
+// =============================================================================
+// Module with different param values
+// =============================================================================
+
+const pm2 = @import_module("Modules/param_module.csl.module", .{ .FACTOR = 5, .OFFSET = -3 });
+
+comptime {
+  // 10 * 5 + (-3) = 47
+  // expected-remark @+1 {{47}}
+  @comptime_print(pm2.compute(10));
+}
+
+// -----
+
+// =============================================================================
+// Multiple imports with different params
+// =============================================================================
+
+const pm_a = @import_module("Modules/param_module.csl.module", .{ .FACTOR = 1, .OFFSET = 0 });
+const pm_b = @import_module("Modules/param_module.csl.module", .{ .FACTOR = 2, .OFFSET = 100 });
+
+comptime {
+  // 5 * 1 + 0 = 5
+  // expected-remark @+1 {{5}}
+  @comptime_print(pm_a.compute(5));
+
+  // 5 * 2 + 100 = 110
+  // expected-remark @+1 {{110}}
+  @comptime_print(pm_b.compute(5));
+}
+
+// -----
+
+// =============================================================================
+// Warning for unused param bindings
+// =============================================================================
+
+// expected-warning @+1 {{unused param binding 'UNUSED'}}
+const pm_unused = @import_module("Modules/param_module.csl.module", .{ .FACTOR = 1, .OFFSET = 0, .UNUSED = 42 });
+
+comptime {
+  // expected-remark @+1 {{5}}
+  @comptime_print(pm_unused.compute(5));
+}
+
+// -----
+
+// =============================================================================
+// Generic function in module - comptime and runtime calls
+// =============================================================================
+
+const gm = @import_module("Modules/simple_module.csl.module");
+
+comptime {
+  // Call generic function at comptime
+  // expected-remark @+1 {{30}}
+  @comptime_print(gm.generic_add(i32, 10, 20));
+
+  // expected-remark @+1 {{7.5}}
+  @comptime_print(gm.generic_add(f32, 2.5, 5.0));
+}
+
+// Call generic function from a runtime function
+fn runtime_user() i32 {
+  return gm.generic_add(i32, 100, 200);
+}
+
+comptime {
+  @export_symbol(runtime_user);
+}
+
+// -----
+
+// =============================================================================
+// Module passed as parameter to another module (imported_module)
+// =============================================================================
+
+const inner = @import_module("Modules/simple_module.csl.module");
+const outer = @import_module("Modules/outer_module.csl.module", .{ .inner_mod = inner });
+
+comptime {
+  // inner_mod.module_add(10, 20) + inner_mod.MODULE_CONST = 30 + 42 = 72
+  // expected-remark @+1 {{72}}
+  @comptime_print(outer.call_inner_fn());
+}
+
+// -----
+
+// =============================================================================
+// Re-exported module: accessing a module's field that is itself a module
+// (regression test for assertion failure in resolveModuleIfNeeded)
+// =============================================================================
+
+const wrapper = @import_module("Modules/wrapper_module.csl.module");
+const inner = wrapper.mod;
+
+comptime {
+  // Access a const through the re-exported module
+  // expected-remark @+1 {{42}}
+  @comptime_print(inner.MODULE_CONST);
+
+  // Call a function through the re-exported module
+  // expected-remark @+1 {{30}}
+  @comptime_print(inner.module_add(10, 20));
+}
+
+// -----
+
+// =============================================================================
+// Error: missing param binding (uses dedicated module with expected-error)
+// =============================================================================
+
+// Warnings about OFFSET and UNUSED are in the module file.
+// OFFSET triggers a comptime error when compute() is called.
+// UNUSED is never referenced, so no error.
+const pm_missing = @import_module("Modules/missing_param_module.csl.module", .{ .FACTOR = 1 });
+
+export fn use_missing_param() i32 {
+  return pm_missing.compute(5);
+}
+

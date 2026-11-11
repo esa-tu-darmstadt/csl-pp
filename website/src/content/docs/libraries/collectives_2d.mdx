@@ -1,0 +1,83 @@
+---
+title: collectives_2d
+description: Broadcast, scatter, gather and reduce along the rows or columns of the rectangle.
+sidebar:
+  order: 3
+---
+
+`csl-libs/collectives_2d` provides collective operations along one dimension of the rectangle: the row of a PE (x) or its column (y). It is the csl++ port of the `collectives_2d` library of the Cerebras SDK, with the same operations.
+
+## Layout part
+
+```csl
+const c2d = @import_module("collectives_2d/layout.csl");
+```
+
+`c2d.get_params(px, py)` returns a struct with the members `x` and `y`, the parameters of the PE part for the two dimensions. The module claims four colors, two per dimension.
+
+## PE part
+
+The PE program imports the PE part once per dimension it uses:
+
+```csl
+const mpi_x = @import_module("collectives_2d/pe.csl", .{ .dim_params = c2d_params.x });
+const mpi_y = @import_module("collectives_2d/pe.csl", .{ .dim_params = c2d_params.y });
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `dim_params` | The `x` or `y` member of the struct from `get_params`. |
+| `dsr_id` | Index of the DSRs `dest`, `src0` and `src1` that the operations use. Default: 1 for x, 2 for y, so that both instances can run operations at the same time. |
+
+Each instance claims two input queues and two output queues.
+
+### `init`
+
+```csl
+fn init() void
+```
+
+Determines the index of the PE in the dimension and the colors of the reduction. Call once at runtime before the first operation.
+
+### `pe_id`
+
+The index of the PE in the dimension, set by `init`.
+
+### `broadcast`
+
+```csl
+async fn broadcast(root: u16, buf: [*]u32, count: u16) void
+```
+
+Sends `buf[0..count)` of the PE with index `root` to every other PE of the dimension, which receives it in `buf`.
+
+### `scatter`
+
+```csl
+async fn scatter(root: u16, send_buf: [*]u32, recv_buf: [*]u32, count: u16) void
+```
+
+Sends the i-th chunk of `count` elements of the root's `send_buf` to the PE with index i, which receives it in `recv_buf[0..count)`. The root copies its own chunk.
+
+### `gather`
+
+```csl
+async fn gather(root: u16, send_buf: [*]u32, recv_buf: [*]u32, count: u16) void
+```
+
+Every PE i sends `send_buf[0..count)` to the root, which stores it as the i-th chunk of `recv_buf`. The root copies its own chunk.
+
+### `reduce_fadds`
+
+```csl
+async fn reduce_fadds(root: u16, send_buf: [*]f32, recv_buf: [*]f32, count: u16) void
+```
+
+The root receives in `recv_buf[0..count)` the elementwise sum of `send_buf[0..count)` over all PEs of the dimension.
+
+## Requirements
+
+- `init()` has run on the PE before the first operation.
+- At most one operation of an instance runs at a time. Operations of the x and the y instance can run at the same time, for example in one `@await_parallel`, since they use different colors, queues and DSRs.
+
+The GEMV and GEMM benchmarks in `test/Integration/coro-benchmarks` of the repository use the library.

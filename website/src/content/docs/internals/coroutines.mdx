@@ -1,0 +1,102 @@
+---
+title: Stackful coroutines in CSL
+description: "How csl-pp lowers async functions and tasks to vanilla CSL: stack embedding, static stack sizing, and the suspend and resume mechanism of the generated runtime."
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import TaskTimeline from '../../../components/TaskTimeline.astro';
+import StackEmbedding from '../../../components/StackEmbedding.astro';
+import SuspendResume from '../../../components/SuspendResume.astro';
+
+A procedure that can be interrupted and resumed at the point of interruption is a coroutine. The async extension of csl++ introduces coroutines into CSL: an `async fn` or `async task` may execute `suspend`, which ends the hardware task that executes it, and continues after the `suspend` when that task is activated again. The hardware does not support suspension. This page describes how `csl-pp` lowers the extension to vanilla CSL. The lowering is the stackful transformation presented in our [paper](../../project/about/#publication). The paper also presents a stackless transformation, the earlier implementation in `csl-pp`; it is superseded by the stackful one and will be removed.
+
+## Hardware-scheduled tasks
+
+Each PE executes one hardware task at a time. A hardware scheduler maintains a task table of entry points, which the program or a hardware event can activate. The scheduler selects an activated entry and executes the task bound to it until the task terminates; tasks neither interleave nor suspend. Every activation is a new execution from the entry point of the task. The program counter, the stack contents and the register values of a previous activation are not restored.
+
+Tensor instructions with a fabric operand execute asynchronously in a microthread, concurrently to the running task. A microthread reports the completion of its instruction by activating a task-table entry:
+
+<TaskTimeline />
+
+A coroutine that waits for such an instruction must therefore give up its hardware task and be re-entered by a later activation of that task. **The lowering has to translate every `suspend` into code that preserves the values of the local variables whose live range crosses the suspension, records the resume point, and terminates the hardware task, and it has to generate a resume path that restores this state and continues execution at the recorded point when the task is activated again.**
+
+## Stackless and stackful lowering
+
+Coroutine implementations follow one of two approaches. A stackless coroutine, as in C++20, Rust or Python, hoists every local variable whose live range crosses a suspension into an explicit frame object and rewrites the function body into a state machine that dispatches on an integer state variable. A stackful coroutine, as in Go or Lua, retains the original control flow and executes on a stack of its own; a suspension saves the stack pointer together with the resume address.
+
+`csl-pp` implements the stackful approach. An async function is then an ordinary function to `cslc`: the compiler sees the same control-flow graph and the same liveness as for synchronous code and keeps the local variables in registers or in ordinary stack slots, as it would for any function. A suspension saves the stack pointer and the resume address of the suspended function, and a resume restores the stack pointer and jumps to that address. Both take a constant number of cycles, independent of how deeply the suspended function is nested in `@await` calls, because the nested calls are ordinary calls on one stack and the saved address identifies the innermost of them. The [paper](../../project/about/#publication) compares both lowerings on the WSE and gives the reasons for the choice.
+
+<Aside title="Notes on our lowering strategy">
+The reasons for the stackful lowering follow from `csl-pp` writing CSL that a closed vendor compiler compiles. Without an alias annotation and without control over code generation, stackful code transformed to CSL performs better than stackless code transformed to CSL. This need not hold for an implementation inside the vendor compiler. LLVM contains stackless coroutine transformations in its backend that could be used there; with the compiler's own knowledge of aliasing and register allocation, they could perform as well as the stackful lowering while making the layout of coroutine frames simpler than the stack embedding described below.
+
+TL;DR: If Cerebras reads this, consider using the (stackless) coroutine transformations built into LLVM instead of our stackful approach. Rust is a very neat example of how coroutines can work without dynamic memory allocation.
+</Aside>
+
+A stackful coroutine conventionally requires a stack that is allocated at runtime, because a coroutine can in general outlive the function that invoked it. The following section describes how `csl-pp` places every stack at compile time instead.
+
+## Stack embedding
+
+The async extension restricts how async functions are invoked: `@await` and `@await_parallel` are the only ways to call one, and neither returns control to the caller until every callee has returned. The lifetime of a callee is therefore contained in the lifetime of the await site that started it. This containment allows the stack of every coroutine to be placed within the stack of its caller, a layout we call stack embedding. The figure shows four moments of one execution of
+
+```csl
+async fn f() void {
+  @await_parallel(g0(), g1(), g2());
+  @await(h());
+}
+
+async task root() void {
+  @await(f());
+}
+```
+
+<StackEmbedding />
+
+Every async task is assigned one contiguous region of memory, a global array, which serves as its stack. In (A), `root` has been entered; its frame occupies the top of the region, and the memory below the stack pointer is unused. The sequential `@await(f())` in (B) is lowered to an ordinary call: `f` executes on the hardware task of the caller, and its frame is placed below the frame of `root`. This is safe because the caller cannot resume before the callee has returned.
+
+The `@await_parallel` in (C) runs its *n* callees concurrently. The first callee executes on the hardware task of the caller; each remaining callee executes on a worker task, a local task that the runtime claims for the duration of the callee. The hardware scheduler can interleave the callees arbitrarily and suspend them at different points, so their frames must not overlap: the registers spilled by one callee would otherwise overwrite the state of another. The lowering therefore partitions the memory below the stack pointer of the caller into *n* disjoint slices, one per callee. The slice of a callee that executes on a worker begins with an argument area of 12 bytes. A worker starts on a different hardware task than the caller, so its arguments cannot be passed in registers; the lowering stores the arguments and the return address in the argument area, and the entry code of the worker loads them from there. The first callee needs no argument area, since it is invoked as a plain call on the task of the caller.
+
+When all callees have returned, the slices are no longer in use, and the subsequent `@await(h())` in (D) places the frame of `h` in the same memory. Sequential sites reuse memory; concurrent callees occupy disjoint memory.
+
+## Static stack sizing
+
+Stack embedding leaves two sizing questions: how large each slice of a parallel site must be, and how large the region of an async task must be in total. Both reduce to one quantity per function. Let *own(F)* be the size of the stack frame that `cslc` emits for a function *F*, and *stack(F)* the total stack that *F* requires, its own frame plus the frames of everything it transitively calls. Then
+
+```
+stack(F) = own(F) + max over the call and await sites s of F of site(s)
+
+site(g(...))                       = stack(g)
+site(@await(g(...)))               = stack(g)
+site(@await_parallel(g0, ..., gn)) = stack(g0) + sum over i >= 1 of (a + stack(gi))
+```
+
+where *a* is the size of the argument area. A plain call and a sequential await contribute the stack of the callee, and the sites of a function share the same memory, so the maximum over them is taken. The callees of a parallel site are live at the same time, so their stacks are summed, and each callee that runs on a worker additionally requires the argument area. For every async task, `csl-pp` resolves this recurrence and emits a global array of size *stack(task)* as the stack of the task.
+
+The frame sizes *own(F)* are determined by `cslc` during its code generation, after `csl-pp` has emitted the program. `csl-pp` therefore compiles each PE program twice. The first round uses placeholder sizes and instructs `cslc` to record the frame size of every function in a `.stack_sizes` section of the ELF file. The second round substitutes the measured sizes. One measurement suffices because the sizes appear only as constants in address arithmetic; they do not influence the frame layout that `cslc` chooses. A program in which every async task and every callee of `@await_parallel` declares its stack size with `stack_size(N)` is compiled in one round.
+
+The recurrence requires a finite call graph. A recursion is accepted when a function of the cycle declares `max_recursion_depth(N)`, which bounds the number of its activations on one stack, or `stack_size(N)`, which makes the function opaque to the sizing. A recursion through a callee of a parallel site with several callees is rejected, because the slice of that callee has a fixed size and would have to contain itself. An indirect call is sized over all functions whose address is taken in the program and whose type matches the call; this is sound because CSL cannot cast function pointers. [Stacks](../../language/stacks/) describes these rules from the perspective of the programmer.
+
+## Suspend and resume
+
+`csl-pp` adds a runtime to every PE program that binds an async task. The runtime maintains one slot per task-table entry, which holds the saved stack pointer and the resume address of the coroutine that executes on that entry, and two of its functions implement suspension and resumption:
+
+<SuspendResume />
+
+`suspend` is a runtime function that `csl-pp` calls at every suspension point. It consists of one block of inline assembly, which stores the address of its own resume label and the current stack pointer into the slot of the executing task and terminates the task with `nop.term`. The block is declared to clobber all registers, the flags and memory. To `cslc`, it is a barrier that destroys every register and may change any memory, so the compiler spills every live register before the block and reloads it on the path that re-enters at the resume label. Values that can be rematerialized, such as constants, are recomputed instead of spilled. The runtime itself saves no register.
+
+Every async task and every worker task is bound to the same entry function of the runtime. When the scheduler dispatches such a task, the entry function reads the identifier of the executing task from a hardware register, sets the stack pointer to the value recorded in the slot of that task, loads the argument registers and the link register from the argument area at the top of the stack, and jumps to the recorded address. For a resume, the recorded address is the resume label in `suspend`, and the jump continues the suspended function as if the call of `suspend` had returned. For the first activation of a task or a worker, the recorded address is the entry point of the coroutine, and the argument area holds its arguments and a return address that points to a runtime routine, which reports the completion of the coroutine when the coroutine returns.
+
+In a simulator trace, a resume therefore appears as an entry of the entry function of the runtime, followed by a register-indirect jump into the middle of the suspended function. [simtracer](../../tools/simtracer/) recognizes this pattern and preserves the call stack of a suspended task across it.
+
+## Parallel await and worker tasks
+
+A callee of `@await_parallel` other than the first executes on a worker task. The lowering claims a local task identifier from the pool that [`@claim_local_task()`](../../language/resources/) uses, binds the entry function of the runtime to this identifier at runtime by patching the task table, stores the arguments of the callee and the address of the completion handler in the argument area of its slice, records the stack pointer of the slice and the entry point of the callee in the slot of the task, and activates the task. The caller then executes the first callee itself. Afterwards it joins: a counter on the stack of the caller holds the number of callees that have not yet returned, and the caller suspends if the counter is not zero.
+
+When a callee on a worker returns, control passes through the link register to the completion handler. The handler releases the task identifier of the worker, decrements the join counter of the parallel site, and activates the caller if the counter has reached zero. The caller resumes after its join and continues after the `@await_parallel`. Because workers are claimed when a callee starts and released when it returns, the number of task-table entries a program requires follows the widest fan-out that is live at one time, not the number of asynchronous phases of the program.
+
+`@current_task()` evaluates to the identifier of the executing hardware task: the task of the caller in a function invoked with `@await`, and the worker in a callee that executes on one. An asynchronous operation started with `.activate = @current_task()` therefore resumes the coroutine that started it, on whichever task that coroutine executes.
+
+## Cost
+
+Suspend and resume take approximately 18 and 34 cycles on WSE-3 hardware, independent of the depth of the await chain. In the seven benchmarks of the Cerebras SDK that were ported to csl++, which use small problem sizes per PE, the runtime functions account for 13 percent of the executed cycles in the median, the largest share in the entry function that performs the resume. The ported programs run within 10 percent of the handwritten vanilla CSL programs in geometric mean and require 43 percent fewer task-table entries. The [paper](../../project/about/#publication) reports the measurements.

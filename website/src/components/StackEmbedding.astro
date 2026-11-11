@@ -1,0 +1,155 @@
+---
+// Stack embedding: one per-task memory region backs four moments of an
+// execution of
+//   async fn f() void { @await_parallel(g0(), g1(), g2()); @await(h()); }
+//   async task root() void { @await(f()); }
+---
+
+<figure class="stacks" aria-label="Four snapshots of the stack region of the task root. A: only the frame of root at the top, the rest free. B: inside await f, the frame of f below root. C: inside the parallel await in f, the free memory below f is divided into slices for g0, g1 and g2, where the slices of g1 and g2 begin with a worker argument area. D: inside await h, the frame of h below f reuses the memory of the slices.">
+  <svg viewBox="0 0 760 330" role="img">
+    <!-- Region brace -->
+    <path class="brace" d="M 40 20 H 28 V 300 H 40" />
+    <text x="20" y="166" class="note" text-anchor="end" transform="rotate(-90 20 166)">stack(root): one global array per async task</text>
+
+    <!-- (A) -->
+    <g transform="translate(60 20)">
+      <rect class="region" x="0" y="0" width="130" height="280" />
+      <rect class="frame active" x="0" y="0" width="130" height="36" />
+      <text x="65" y="23" class="fname">root</text>
+      <text x="65" y="165" class="free">free</text>
+      <text x="-4" y="40" class="sp" text-anchor="end">SP →</text>
+      <text x="65" y="300" class="caption">(A) root entered</text>
+    </g>
+
+    <!-- (B) -->
+    <g transform="translate(230 20)">
+      <rect class="region" x="0" y="0" width="130" height="280" />
+      <rect class="frame" x="0" y="0" width="130" height="36" />
+      <text x="65" y="23" class="fname">root</text>
+      <rect class="frame active" x="0" y="36" width="130" height="44" />
+      <text x="65" y="62" class="fname">f</text>
+      <text x="65" y="185" class="free">free</text>
+      <text x="-4" y="84" class="sp" text-anchor="end">SP →</text>
+      <text x="65" y="300" class="caption">(B) inside @await(f())</text>
+    </g>
+
+    <!-- (C) -->
+    <g transform="translate(400 20)">
+      <rect class="region" x="0" y="0" width="130" height="280" />
+      <rect class="frame" x="0" y="0" width="130" height="36" />
+      <text x="65" y="23" class="fname">root</text>
+      <rect class="frame" x="0" y="36" width="130" height="44" />
+      <text x="65" y="62" class="fname">f</text>
+      <rect class="frame active" x="0" y="80" width="130" height="40" />
+      <text x="65" y="104" class="fname">g0</text>
+      <rect class="argarea" x="0" y="120" width="130" height="14" />
+      <text x="65" y="131" class="argtext">worker arguments</text>
+      <rect class="frame active" x="0" y="134" width="130" height="40" />
+      <text x="65" y="158" class="fname">g1</text>
+      <rect class="argarea" x="0" y="174" width="130" height="14" />
+      <text x="65" y="185" class="argtext">worker arguments</text>
+      <rect class="frame active" x="0" y="188" width="130" height="40" />
+      <text x="65" y="212" class="fname">g2</text>
+      <text x="65" y="258" class="free">free</text>
+      <text x="-4" y="124" class="sp" text-anchor="end">SP₁ →</text>
+      <text x="-4" y="178" class="sp" text-anchor="end">SP₂ →</text>
+      <text x="-4" y="232" class="sp" text-anchor="end">SP₃ →</text>
+      <path class="reuse" d="M 136 82 H 146 V 226 H 136" />
+      <text x="152" y="150" class="reuse-text">reused</text>
+      <text x="152" y="166" class="reuse-text">by h</text>
+      <text x="65" y="300" class="caption">(C) inside @await_parallel</text>
+    </g>
+
+    <!-- (D) -->
+    <g transform="translate(600 20)">
+      <rect class="region" x="0" y="0" width="130" height="280" />
+      <rect class="frame" x="0" y="0" width="130" height="36" />
+      <text x="65" y="23" class="fname">root</text>
+      <rect class="frame" x="0" y="36" width="130" height="44" />
+      <text x="65" y="62" class="fname">f</text>
+      <rect class="frame active" x="0" y="80" width="130" height="150" />
+      <text x="65" y="160" class="fname">h</text>
+      <text x="65" y="258" class="free">free</text>
+      <text x="-4" y="234" class="sp" text-anchor="end">SP →</text>
+      <text x="65" y="300" class="caption">(D) inside @await(h())</text>
+    </g>
+  </svg>
+</figure>
+
+<style>
+  .stacks {
+    margin-block: 1.5rem 2rem;
+  }
+  .stacks svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    font-family: var(--sl-font-system);
+  }
+  .region {
+    fill: var(--sl-color-gray-7, var(--sl-color-bg));
+    stroke: var(--sl-color-gray-4);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+  }
+  .frame {
+    fill: var(--sl-color-gray-6);
+    stroke: var(--sl-color-gray-3);
+    stroke-width: 1.5;
+  }
+  .frame.active {
+    fill: var(--cpp-orange-bg);
+    stroke: var(--cpp-orange);
+  }
+  .argarea {
+    fill: var(--cpp-teal-bg);
+    stroke: var(--cpp-teal);
+    stroke-width: 1;
+  }
+  .fname {
+    text-anchor: middle;
+    font-family: var(--sl-font-mono);
+    font-size: 14px;
+    font-weight: 600;
+    fill: var(--sl-color-white);
+  }
+  .argtext {
+    text-anchor: middle;
+    font-size: 9.5px;
+    fill: var(--sl-color-white);
+  }
+  .free {
+    text-anchor: middle;
+    font-size: 12px;
+    font-style: italic;
+    fill: var(--sl-color-gray-2);
+  }
+  .sp {
+    font-family: var(--sl-font-mono);
+    font-size: 11px;
+    fill: var(--sl-color-gray-2);
+  }
+  .caption {
+    text-anchor: middle;
+    font-size: 12.5px;
+    fill: var(--sl-color-gray-2);
+  }
+  .brace, .reuse {
+    fill: none;
+    stroke: var(--sl-color-gray-3);
+    stroke-width: 1.5;
+  }
+  .reuse {
+    stroke: var(--cpp-orange);
+  }
+  .reuse-text {
+    font-size: 11px;
+    font-style: italic;
+    fill: var(--cpp-orange);
+  }
+  .note {
+    font-size: 12px;
+    font-style: italic;
+    fill: var(--sl-color-gray-2);
+  }
+</style>

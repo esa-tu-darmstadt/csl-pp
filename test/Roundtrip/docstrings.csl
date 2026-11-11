@@ -1,0 +1,54 @@
+// RUN: csl-s2s %s --emit-after-parsing | FileCheck %s
+
+// =============================================================================
+// Single-line /// doc comment
+// =============================================================================
+
+/// Simple doc comment.
+export fn simple() void {}
+// CHECK: generic_func @simple
+// CHECK: doc_string = "Simple doc comment."
+
+// =============================================================================
+// Single-line // comment
+// =============================================================================
+
+// Regular comment captured too.
+export fn regular() void {}
+// CHECK: generic_func @regular
+// CHECK: doc_string = "Regular comment captured too."
+
+// =============================================================================
+// Multi-line comment block (/// and // mixed)
+// =============================================================================
+
+/// First line.
+// Second line.
+/// Third line.
+export fn multi() void {}
+// CHECK: generic_func @multi
+// CHECK: doc_string = "First line.\0ASecond line.\0AThird line."
+
+// =============================================================================
+// Blank line between comment and fn — not directly attached
+// =============================================================================
+
+/// Separated by blank line.
+
+export fn blank_sep() void {}
+// CHECK: generic_func @blank_sep
+// CHECK-NOT: doc_string = "Separated by blank line."
+
+// =============================================================================
+// Doc comment on functions with modifiers (export, inline)
+// =============================================================================
+
+/// Exported function doc.
+export fn exp_fn() void {}
+// CHECK: generic_func @exp_fn
+// CHECK: doc_string = "Exported function doc."
+
+/// Inline function doc.
+inline fn inl_fn() void {}
+// CHECK: generic_func @inl_fn
+// CHECK: doc_string = "Inline function doc."

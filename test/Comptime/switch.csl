@@ -1,0 +1,346 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic comptime switch with comptime-known input
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 2;
+    const result = switch (@as(i32, x)) {
+        1 => 10,
+        2 => 20,
+        3 => 30,
+        else => 0
+    };
+    // expected-remark @+1 {{20}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Comptime switch matching first case
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 1;
+    const result = switch (@as(i32, x)) {
+        1 => 100,
+        2 => 200,
+        else => 0
+    };
+    // expected-remark @+1 {{100}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Comptime switch matching else branch
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 99;
+    const result = switch (@as(i32, x)) {
+        1 => 10,
+        2 => 20,
+        else => 999
+    };
+    // expected-remark @+1 {{999}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Comptime switch with multiple case values per branch
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 3;
+    const result = switch (@as(i32, x)) {
+        1, 2, 3 => 100,
+        4, 5 => 200,
+        else => 0
+    };
+    // expected-remark @+1 {{100}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Comptime switch - second value in multi-value case
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 5;
+    const result = switch (@as(i32, x)) {
+        1, 2, 3 => 100,
+        4, 5 => 200,
+        else => 0
+    };
+    // expected-remark @+1 {{200}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Comptime switch on enum
+// =============================================================================
+
+const Color = enum(u8) {
+    red,
+    green,
+    blue,
+};
+
+comptime {
+    const c = Color.green;
+    const result = switch (c) {
+        Color.red => 1,
+        Color.green => 2,
+        Color.blue => 3
+    };
+    // expected-remark @+1 {{2}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Comptime switch - only matching branch is evaluated
+// When input is comptime-known, non-matching branches are not semantically checked
+// The @comptime_assert(false) would fail if evaluated, proving the else branch is skipped
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 1;
+    switch (@as(i32, x)) {
+        1 => {
+            // This branch is taken
+        },
+        else => {
+            // This branch is NOT taken, so the assert should not fire
+            @comptime_assert(false);
+        }
+    }
+}
+
+// -----
+
+// =============================================================================
+// Comptime switch with comptime_print inside case block
+// Only the matching branch (case 2) should be evaluated
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 2;
+    switch (@as(i32, x)) {
+        1 => {
+            @comptime_print("case 1");  // NOT evaluated
+        },
+        2 => {
+            // expected-remark @+1 {{case 2}}
+            @comptime_print("case 2");  // This IS evaluated
+        },
+        else => {
+            @comptime_print("default");  // NOT evaluated
+        }
+    }
+}
+
+// -----
+
+// =============================================================================
+// Nested comptime switch
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 2;
+    const y: comptime_int = 1;
+    const result = switch (@as(i32, x)) {
+        1 => switch (@as(i32, y)) {
+            1 => 11,
+            else => 10
+        },
+        2 => switch (@as(i32, y)) {
+            1 => 21,
+            else => 20
+        },
+        else => 0
+    };
+    // expected-remark @+1 {{21}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Switch in comptime function
+// =============================================================================
+
+fn comptime_switch_fn(comptime x: i32) i32 {
+    return switch (x) {
+        1 => 10,
+        2 => 20,
+        3 => 30,
+        else => 0
+    };
+}
+
+comptime {
+    // expected-remark @+1 {{20}}
+    @comptime_print(comptime_switch_fn(2));
+    // expected-remark @+1 {{30}}
+    @comptime_print(comptime_switch_fn(3));
+    // expected-remark @+1 {{0}}
+    @comptime_print(comptime_switch_fn(99));
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Duplicate case values
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 1;
+    // expected-error @+1 {{duplicate case value}}
+    const result = switch (@as(i32, x)) {
+        1 => 10,
+        1 => 20,
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Duplicate case value across multi-value branch
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 1;
+    // expected-error @+1 {{duplicate case value}}
+    const result = switch (@as(i32, x)) {
+        1, 2 => 10,
+        2, 3 => 20,
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Case value not comptime-known
+// =============================================================================
+
+var runtime_val: i32 = 5;
+
+export fn test_non_comptime_case(x: i32) i32 {
+    // expected-error @+1 {{case value must be comptime-known}}
+    return switch (x) {
+        runtime_val => 10,
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Switch input must be fixed-width integer or enum (not comptime_int)
+// =============================================================================
+
+comptime {
+    const x: comptime_int = 1;
+    // expected-error @+1 {{switch input must be fixed-width integer or enum}}
+    const result = switch (x) {
+        1 => 10,
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// Exhaustive enum switch (no else needed)
+// =============================================================================
+
+const Direction = enum(u8) {
+    north,
+    south,
+    east,
+    west,
+};
+
+fn direction_to_int(d: Direction) i32 {
+    return switch (d) {
+        Direction.north => 0,
+        Direction.south => 1,
+        Direction.east => 2,
+        Direction.west => 3
+    };
+}
+
+comptime {
+    // expected-remark @+1 {{2}}
+    @comptime_print(direction_to_int(Direction.east));
+    @export_symbol(direction_to_int);
+}
+
+// -----
+
+// =============================================================================
+// ERROR: Non-exhaustive switch without else
+// =============================================================================
+
+export fn non_exhaustive(x: i32) i32 {
+    // expected-error @+1 {{switch must cover all values or have an else branch}}
+    return switch (x) {
+        1 => 10,
+        2 => 20
+    };
+}
+
+// -----
+
+// =============================================================================
+// Switch with break inside a for loop - yield may never be evaluated
+// =============================================================================
+
+comptime {
+    var result: comptime_int = 0;
+    for (@range(i32, 5)) |i| {
+        result += switch (i) {
+            0 => 1,
+            2 => {
+                break;
+            },
+            else => 10
+        };
+    }
+    // Loop: i=0 yields 1, i=1 yields 10, i=2 breaks
+    // expected-remark @+1 {{11}}
+    @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Error: Switch in for loop yields different types in different branches 
+// =============================================================================
+
+comptime {
+    var result: comptime_int = 0;
+    for (@range(i32, 5)) |i| {
+        // expected-error @+1 {{incompatible types for binary operation: comptime_int and void}}
+        result += switch (i) {
+            0 => 1,
+            2 => {
+            },
+            else => 10
+        };
+    }
+}

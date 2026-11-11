@@ -1,0 +1,122 @@
+# Builds and tests csl-mlir for every platform in static and shared variants.
+#
+# The jobs resolve LLVM (at the tracked llvm gitlink) and the other
+# dependencies from the package registry of csl++, which they read without
+# credentials, and build the missing binaries; LLVM is rebuilt only after its
+# gitlink or recipe changed. Pushes to main then upload the binaries built
+# here and csl-mlir/<commit> to the registry. The upload runs in a separate
+# job: it is the only job with credentials for the registry, and it runs no
+# build code. docs/Building.md describes the setup.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The Conan remote csl-pp: the package registry of the GitLab project
+  # cerebras/packages/csl-pp-packages.
+  CONAN_REMOTE_URL: https://git.esa.informatik.tu-darmstadt.de/api/v4/projects/162/packages/conan
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} (shared=${{ matrix.shared }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [rhel8-gcc15]
+        shared: ["False", "True"]
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      CSL_SHARED: ${{ matrix.shared }}
+      SAVE_PACKAGES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '0' }}
+      CI_PASS_ENV: CONAN_REMOTE_URL SAVE_PACKAGES
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: .github/scripts/prepare-runner.sh
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CI_WORK }}/ccache
+          key: ccache-${{ matrix.platform }}-${{ matrix.shared }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.platform }}-${{ matrix.shared }}-
+      - name: Build and test
+        run: .github/scripts/container.sh bash .github/scripts/build.sh
+      # Only main saves the cache, so that pull requests cannot change what
+      # other builds restore.
+      - name: Save ccache
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CI_WORK }}/ccache
+          key: ccache-${{ matrix.platform }}-${{ matrix.shared }}-${{ github.sha }}
+      - name: Keep the built packages for the upload
+        if: env.SAVE_PACKAGES == '1'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: conan-packages-${{ matrix.platform }}-${{ matrix.shared }}
+          path: ci-out/conan-packages.tgz
+          retention-days: 3
+          if-no-files-found: error
+      - name: Keep the build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-logs-${{ matrix.platform }}-${{ matrix.shared }}
+          path: ci-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # Uploads the packages of all build jobs to the registry. The environment
+  # conan-registry holds the deploy token (CONAN_REGISTRY_USER and
+  # CONAN_REGISTRY_TOKEN, scope write_package_registry) and admits only main.
+  upload:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: conan-registry
+    permissions:
+      contents: read
+    concurrency:
+      group: conan-upload
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: conan
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: conan-packages-*
+          path: packages
+      - name: Upload
+        env:
+          CONAN_HOME: ${{ runner.temp }}/conan
+          CONAN_LOGIN_USERNAME_CSL_PP: ${{ secrets.CONAN_REGISTRY_USER }}
+          CONAN_PASSWORD_CSL_PP: ${{ secrets.CONAN_REGISTRY_TOKEN }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/conan-venv"
+          "$RUNNER_TEMP/conan-venv/bin/pip" install -q --no-cache-dir -r conan/requirements.txt
+          export PATH="$RUNNER_TEMP/conan-venv/bin:$PATH"
+          conan config install conan/config > /dev/null
+          conan remote add --index 0 csl-pp "$CONAN_REMOTE_URL"
+          for archive in packages/*/conan-packages.tgz; do
+            conan cache restore "$archive" --format=json --out-file="${archive%.tgz}.json" > /dev/null
+            conan upload --list="${archive%.tgz}.json" -r csl-pp --confirm
+          done

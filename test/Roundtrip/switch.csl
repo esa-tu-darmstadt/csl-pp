@@ -1,0 +1,213 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Basic switch statement with integer input
+// =============================================================================
+
+// CHECK: export fn basic_switch(param0: i32) i32 {
+// CHECK:     switch (param0) {
+// CHECK:         @as(i32, 1) => {
+// CHECK:             return @as(i32, 10);
+// CHECK:         },
+// CHECK:         @as(i32, 2) => {
+// CHECK:             return @as(i32, 20);
+// CHECK:         },
+// CHECK:         else => {
+// CHECK:             return @as(i32, 0);
+// CHECK:         }
+// CHECK:     }
+// CHECK: }
+export fn basic_switch(x: i32) i32 {
+    switch (x) {
+        1 => {
+            return 10;
+        },
+        2 => {
+            return 20;
+        },
+        else => {
+            return 0;
+        }
+    }
+}
+
+// -----
+
+// =============================================================================
+// Switch expression returning value
+// =============================================================================
+
+// CHECK: export fn switch_expr(param0: i32) i32 {
+// CHECK:     return switch (param0) {
+// CHECK:         @as(i32, 1) => @as(i32, 10),
+// CHECK:         @as(i32, 2) => @as(i32, 20),
+// CHECK:         else => @as(i32, 0)
+// CHECK:     };
+// CHECK: }
+export fn switch_expr(x: i32) i32 {
+    return switch (x) {
+        1 => 10,
+        2 => 20,
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// Switch with multiple case values per branch
+// =============================================================================
+
+// CHECK: export fn multi_case(param0: i32) i32 {
+// CHECK:     return switch (param0) {
+// CHECK:         @as(i32, 1), @as(i32, 2), @as(i32, 3) => @as(i32, 100),
+// CHECK:         @as(i32, 4), @as(i32, 5) => @as(i32, 200),
+// CHECK:         else => @as(i32, 0)
+// CHECK:     };
+// CHECK: }
+export fn multi_case(x: i32) i32 {
+    return switch (x) {
+        1, 2, 3 => 100,
+        4, 5 => 200,
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// Switch on enum type
+// =============================================================================
+
+const Color = enum(u8) {
+    red,
+    green,
+    blue,
+};
+
+// CHECK: const [[Color:.*]] = enum(u8) { red, green, blue };
+// CHECK: export fn enum_switch(param0: [[Color]]) i32 {
+// CHECK:     return switch (param0) {
+// CHECK:         [[Color]].red => @as(i32, 1),
+// CHECK:         [[Color]].green => @as(i32, 2),
+// CHECK:         [[Color]].blue => @as(i32, 3)
+// CHECK:     };
+// CHECK: }
+export fn enum_switch(c: Color) i32 {
+    return switch (c) {
+        Color.red => 1,
+        Color.green => 2,
+        Color.blue => 3
+    };
+}
+
+// -----
+
+// =============================================================================
+// Nested switch expressions
+// =============================================================================
+
+// CHECK: export fn nested_switch(param0: i32, param1: i32) i32 {
+// CHECK:     return switch (param0) {
+// CHECK:         @as(i32, 1) => switch (param1) {
+// CHECK:             @as(i32, 1) => @as(i32, 11),
+// CHECK:             @as(i32, 2) => @as(i32, 12),
+// CHECK:             else => @as(i32, 10)
+// CHECK:         },
+// CHECK:         @as(i32, 2) => switch (param1) {
+// CHECK:             @as(i32, 1) => @as(i32, 21),
+// CHECK:             @as(i32, 2) => @as(i32, 22),
+// CHECK:             else => @as(i32, 20)
+// CHECK:         },
+// CHECK:         else => @as(i32, 0)
+// CHECK:     };
+// CHECK: }
+export fn nested_switch(x: i32, y: i32) i32 {
+    return switch (x) {
+        1 => switch (y) {
+            1 => 11,
+            2 => 12,
+            else => 10
+        },
+        2 => switch (y) {
+            1 => 21,
+            2 => 22,
+            else => 20
+        },
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// Switch used as statement (result discarded)
+// =============================================================================
+
+var global_result: i32 = 0;
+
+// CHECK: export fn switch_statement(param0: i32) void {
+// CHECK:     switch (param0) {
+// CHECK:         @as(i32, 1) => {
+// CHECK:             global_result = @as(i32, 10);
+// CHECK:         },
+// CHECK:         @as(i32, 2) => {
+// CHECK:             global_result = @as(i32, 20);
+// CHECK:         },
+// CHECK:         else => {
+// CHECK:             global_result = @as(i32, 0);
+// CHECK:         }
+// CHECK:     }
+// CHECK: }
+export fn switch_statement(x: i32) void {
+    switch (x) {
+        1 => {
+            global_result = 10;
+        },
+        2 => {
+            global_result = 20;
+        },
+        else => {
+            global_result = 0;
+        }
+    }
+}
+
+// -----
+
+// =============================================================================
+// Error: Incompatible switch branch types
+// =============================================================================
+
+export fn switch_expr(x: i32) i32 {
+    // expected-error @+1 {{incompatible types in switch branches: comptime_int and void}}
+    return switch (x) {
+        1 => 10,
+        2 => {}, // yields void
+        else => 0
+    };
+}
+
+// -----
+
+// =============================================================================
+// Control-Flow from inside switch branches
+// =============================================================================
+
+// CHECK: export fn switch_expr(param0: i32) i32 {
+// CHECK:     return switch (param0) {
+// CHECK:         @as(i32, 1) => @as(i32, 10),
+// CHECK:         @as(i32, 2) => {
+// CHECK:             return @as(i32, 10);
+// CHECK:         },
+// CHECK:         else => @as(i32, 0)
+// CHECK:     };
+// CHECK: }
+export fn switch_expr(x: i32) i32 {
+    return switch (x) {
+        1 => 10,
+        2 => { return 10; },
+        else => 0
+    };
+}
+

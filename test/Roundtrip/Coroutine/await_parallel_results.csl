@@ -1,0 +1,58 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false \
+// RUN:   | FileCheck %s
+//
+// @await_parallel returns the tuple of the callee results. The first callee
+// runs on the caller's task and returns its result directly; a worker
+// callee returns to the completion handler, so it runs through a wrapper
+// that stores the result into a variable of the caller. Callees without a
+// result have no field in the transpiled tuple.
+
+const STATE: local_task_id = @get_local_task_id(1);
+var out: i32 = 0;
+
+async fn a(x: i16) i16 { return x + 1; }
+async fn b(x: i16) i32 { return @as(i32, x) * 2; }
+async fn c() void {}
+
+// CHECK-LABEL: fn __await_parallel_result_b(param0: i16, param1: *i32) void {
+// CHECK-NEXT:    param1.* = b(param0);
+// CHECK-NEXT:    return;
+
+// CHECK-LABEL: fn root() void {
+// CHECK:         var [[SLOT:__await_parallel_result_[0-9]+]]: i32;
+// CHECK:         : [inp] "r" (&[[SLOT]])
+// CHECK:         : [inp] "r" (&__await_parallel_result_b)
+// CHECK:         const [[FIRST:__await_parallel_first_result_[0-9]+]]: i16 = a(@as(i16, 1));
+// CHECK-NEXT:    __fiber_runtime__caller_join(
+// CHECK-NEXT:    const r: @type_of(.{ @as(i16, 0), @as(i32, 0) }) = .{ [[FIRST]], [[SLOT]] };
+// CHECK-NEXT:    out = @as(i32, r[0]) + r[1];
+async task root() void {
+  const r = @await_parallel(a(1), b(2), c());
+  out = @as(i32, r[0]) + r[1];
+  // Only void results: no result is transpiled.
+  const u = @await_parallel(c(), c());
+}
+
+comptime { @bind_local_task(root, STATE); }
+fn fstart() void { @coro_runtime_init(); @activate(STATE); }
+comptime { @export_symbol(fstart); }
+
+// -----
+
+// The address the result is stored to takes an argument register as well.
+
+const STATE: local_task_id = @get_local_task_id(1);
+var out: i32 = 0;
+
+async fn a() void {}
+async fn wide(x: i16, y: i16, z: i16, w: i16) i32 { return @as(i32, x + y + z + w); }
+
+async task root() void {
+  // expected-error @+1 {{the arguments of @await_parallel callee 'wide' and the address its result is stored to do not fit into its four 16-bit argument registers (a 32-bit argument takes two, larger arguments are not supported); pass fewer arguments, or a pointer to a struct holding them}}
+  const r = @await_parallel(a(), wide(1, 2, 3, 4));
+  out = r[1];
+}
+
+comptime { @bind_local_task(root, STATE); }
+fn fstart() void { @coro_runtime_init(); @activate(STATE); }
+comptime { @export_symbol(fstart); }

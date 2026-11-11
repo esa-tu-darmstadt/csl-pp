@@ -1,0 +1,71 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Constant true condition: then-branch inlined, else-branch removed
+// =============================================================================
+
+// CHECK: export fn const_if_true(param0: i32) i32 {
+// CHECK:     return param0;
+// CHECK: }
+export fn const_if_true(x: i32) i32 {
+    if (true) {
+        return x;
+    }
+    return 0;
+}
+
+// -----
+
+// =============================================================================
+// Constant false condition: then-branch removed
+// =============================================================================
+
+// CHECK: export fn const_if_false(param0: i32) i32 {
+// CHECK:     return @as(i32, 0);
+// CHECK: }
+export fn const_if_false(x: i32) i32 {
+    if (false) {
+        return x;
+    }
+    return 0;
+}
+
+// -----
+
+// =============================================================================
+// Constant false condition with else: else-branch inlined
+// =============================================================================
+
+// CHECK: export fn const_if_false_else(param0: i32, param1: i32) i32 {
+// CHECK:     return param1;
+// CHECK: }
+export fn const_if_false_else(a: i32, b: i32) i32 {
+    if (false) {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+// -----
+
+// =============================================================================
+// Folding a constant branch preserves lexical declaration hygiene
+// =============================================================================
+
+// CHECK: export fn const_if_nested_name(param0: i32) i32 {
+// CHECK:     var result: i32 = @as(i32, 0);
+// CHECK:     const x__scope_1: i32 = param0;
+// CHECK:     result = x__scope_1;
+// CHECK:     const x: i32 = param0 + @as(i32, 1);
+// CHECK:     return result + x;
+// CHECK: }
+export fn const_if_nested_name(value: i32) i32 {
+    var result: i32 = 0;
+    if (true) {
+        const x = value;
+        result = x;
+    }
+    const x = value + 1;
+    return result + x;
+}

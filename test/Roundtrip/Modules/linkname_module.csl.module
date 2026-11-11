@@ -1,0 +1,11 @@
+// Module with linkname and private symbols for testing auto-linkname
+
+var my_var: i32 = 0;
+
+fn internal_impl(x: i32) i32 {
+    return x + 100;
+}
+
+fn custom_named_func(x: i32) linkname("my_custom_link_name") i32 {
+    return internal_impl(x) + my_var;
+}

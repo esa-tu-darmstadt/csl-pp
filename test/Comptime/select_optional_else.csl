@@ -1,0 +1,115 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Valid: if-expression without else with comptime-known true condition
+// =============================================================================
+
+comptime {
+  const x: i32 = if (true) 42;
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+}
+
+// -----
+
+// =============================================================================
+// Valid: nested if-else chain with all branches covered
+// =============================================================================
+
+comptime {
+  const result: i32 =
+    if      (false) 1
+    else if (false) 2
+    else            3;
+
+  // expected-remark @+1 {{3}}
+  @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Valid: chained if-else-if without final else (last branch has comptime true)
+// =============================================================================
+
+comptime {
+  const result: i32 =
+    if      (false) 1
+    else if (false) 2
+    else if (true)  3;
+
+  // expected-remark @+1 {{3}}
+  @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Valid: simple if-expression with else branch (standard case)
+// =============================================================================
+
+comptime {
+  const x: i32 = if (false) 10 else 20;
+  // expected-remark @+1 {{20}}
+  @comptime_print(x);
+
+  const y: i32 = if (true) 30 else 40;
+  // expected-remark @+1 {{30}}
+  @comptime_print(y);
+}
+
+// -----
+
+// =============================================================================
+// Error: if-expression without else with comptime-known false condition
+// =============================================================================
+
+comptime {
+  // expected-error @+1 {{if-expression without else requires condition to be true, but condition evaluates to false at comptime}}
+  const x: i32 = if (false) 42;
+}
+
+// -----
+
+// =============================================================================
+// Error: chained if-else-if without final else (all false)
+// =============================================================================
+
+comptime {
+  const result: i32 =
+    if      (false) 1
+    else if (false) 2
+    // expected-error @+1 {{if-expression without else requires condition to be true, but condition evaluates to false at comptime}}
+    else if (false) 3;
+}
+
+// -----
+
+// =============================================================================
+// Error: if-expression without else with non-comptime condition
+// =============================================================================
+
+fn test_runtime_condition(cond: bool) i32 {
+  // expected-error @+1 {{if-expression without else requires a comptime-known condition, but condition is not comptime-known}}
+  return if (cond) 42;
+}
+
+comptime {
+  @export_symbol(test_runtime_condition);
+}
+
+// -----
+
+// =============================================================================
+// Valid: if-expression without else with comptime-true condition and runtime value
+// =============================================================================
+
+fn test_runtime_value(x: i32) i32 {
+  // Condition is comptime true, but true branch is a runtime value
+  // This should fold to just returning x
+  return if (true) x;
+}
+
+comptime {
+  @export_symbol(test_runtime_value);
+}

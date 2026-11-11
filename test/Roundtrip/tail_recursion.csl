@@ -1,0 +1,117 @@
+// RUN: csl-s2s %s -verify-diagnostics --count-tasks=false | FileCheck %s
+//
+// Tail calls of a function to itself become a loop.
+
+// =============================================================================
+// Several parameters: the new arguments are evaluated before any parameter
+// changes.  The annotation is no longer needed.
+// =============================================================================
+
+// CHECK-LABEL: fn gcd(param0: u16, param1: u16) u16 {
+// CHECK-NEXT:    var __tailrec_param0: u16 = param0;
+// CHECK-NEXT:    var __tailrec_param1: u16 = param1;
+// CHECK-NEXT:    while (true) {
+// CHECK-NEXT:      if (__tailrec_param1 == @as(u16, 0)) {
+// CHECK-NEXT:        return __tailrec_param0;
+// CHECK-NEXT:      }
+// CHECK-NEXT:      var __tailrec_arg0: u16 = __tailrec_param1;
+// CHECK-NEXT:      var __tailrec_arg1: u16 = __tailrec_param0 % __tailrec_param1;
+// CHECK-NEXT:      __tailrec_param0 = __tailrec_arg0;
+// CHECK-NEXT:      __tailrec_param1 = __tailrec_arg1;
+// CHECK-NEXT:      continue;
+// CHECK-NEXT:    }
+// CHECK-NEXT:    var __tailrec_unreachable: u16;
+// CHECK-NEXT:    return __tailrec_unreachable;
+// CHECK-NEXT:  }
+// expected-warning@+1 {{'max_recursion_depth' has no effect because the recursive calls of 'gcd' are tail calls, which are compiled into a loop; remove it}}
+fn gcd(a: u16, b: u16) max_recursion_depth(32) u16 {
+  if (b == 0) {
+    return a;
+  }
+  return gcd(b, a % b);
+}
+
+// =============================================================================
+// A parameter passed on unchanged is not assigned.
+// =============================================================================
+
+// CHECK-LABEL: fn sum(param0: u16, param1: u32, param2: u16) u32 {
+// CHECK:           var __tailrec_arg0: u16 = __tailrec_param0 - __tailrec_param2;
+// CHECK-NEXT:      var __tailrec_arg1: u32 = __tailrec_param1 + @as(u32, __tailrec_param0);
+// CHECK-NEXT:      __tailrec_param0 = __tailrec_arg0;
+// CHECK-NEXT:      __tailrec_param1 = __tailrec_arg1;
+// CHECK-NEXT:      continue;
+fn sum(n: u16, acc: u32, step: u16) u32 {
+  if (n == 0) {
+    return acc;
+  }
+  return sum(n - step, acc + @as(u32, n), step);
+}
+
+// =============================================================================
+// Void function: a single assignment needs no temporary.
+// =============================================================================
+
+// CHECK-LABEL: fn countdown(param0: u16) void {
+// CHECK-NEXT:    var __tailrec_param0: u16 = param0;
+// CHECK-NEXT:    while (true) {
+// CHECK-NEXT:      if (__tailrec_param0 == @as(u16, 0)) {
+// CHECK-NEXT:        return;
+// CHECK-NEXT:      }
+// CHECK-NEXT:      counter += @as(u16, 1);
+// CHECK-NEXT:      __tailrec_param0 = __tailrec_param0 - @as(u16, 1);
+// CHECK-NEXT:      continue;
+// CHECK-NEXT:    }
+// CHECK-NEXT:    return;
+// CHECK-NEXT:  }
+var counter: u16 = 0;
+fn countdown(n: u16) void {
+  if (n == 0) {
+    return;
+  }
+  counter += 1;
+  countdown(n - 1);
+}
+
+// =============================================================================
+// Calls that stay calls: inside another loop (CSL has no labeled continue),
+// not in tail position, and in a function that takes an address.
+// =============================================================================
+
+// CHECK-LABEL: fn search(param0: u16) u16 {
+// CHECK:             return search(param0 - @as(u16, 1));
+fn search(n: u16) u16 {
+  var i: u16 = 0;
+  while (i < n) : (i += 1) {
+    if (i * i == n) {
+      return search(n - 1);
+    }
+  }
+  return n;
+}
+
+// CHECK-LABEL: fn fib(param0: u16) u16 {
+// CHECK:         return fib(param0 - @as(u16, 1)) + fib(param0 - @as(u16, 2));
+fn fib(n: u16) u16 {
+  if (n < 2) {
+    return n;
+  }
+  return fib(n - 1) + fib(n - 2);
+}
+
+// CHECK-LABEL: fn uses_address(param0: u16) u16 {
+// CHECK:         return uses_address(param0 - @as(u16, 1));
+fn uses_address(n: u16) u16 {
+  var x: u16 = n;
+  const p = &x;
+  if (n == 0) {
+    return p.*;
+  }
+  return uses_address(n - 1);
+}
+
+export fn use() u32 {
+  countdown(3);
+  return @as(u32, gcd(12, 18) + search(9) + fib(5) + uses_address(2)) +
+         sum(10, 0, 1);
+}

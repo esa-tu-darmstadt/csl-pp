@@ -1,0 +1,236 @@
+// BiCGSTAB kernel using coroutines.
+//
+// Both the allreduce and stencil modules expose async functions composed
+// via @await. No explicit task IDs are needed for either module — all
+// task allocation is handled by the coroutine worker pool.
+
+param memcpyParams;
+param reduceParams;
+param stencilParams;
+
+param MAX_ZDIM: i16; // size of vector x
+param BLOCK_SIZE: i16; // size of temporary buffers for communication
+
+const STATE: local_task_id = @claim_local_task();
+
+const timestamp = @import_module("<time>");
+const math_lib = @import_module("<math>");
+const blas_lib = @import_module("blas.csl");
+
+// memcpy module reserves input/output queue 0 and 1
+const sys_mod = @import_module( "<memcpy/memcpy>", memcpyParams);
+
+const reduce_mod = @import_module( "../../csl-libs/allreduce/pe.csl", .{
+    .reduce_params = reduceParams,
+    .dsr_id = 1,
+});
+
+const stencil_mod = @import_module( "../../csl-libs/stencil_3d_7pts/pe.csl", .{
+    .stencil_params = stencilParams,
+    .impl = "hybrid",
+    .output_ut_id = 7,
+    .BLOCK_SIZE = BLOCK_SIZE,
+    .dsr_ids = [2]u16{2, 3},
+});
+
+
+var tscStartBuffer = @zeros([timestamp.tsc_size_words]u16);
+var tscEndBuffer = @zeros([timestamp.tsc_size_words]u16);
+
+var b = @zeros([MAX_ZDIM]f32); // right-hand-side
+var x = @zeros([MAX_ZDIM]f32); // approximated solution
+
+var r0 = @zeros([MAX_ZDIM]f32); // initial residual
+var r = @zeros([MAX_ZDIM]f32); // residual
+var p = @zeros([MAX_ZDIM]f32); // Krylov space
+var v = @zeros([MAX_ZDIM]f32); // Krylov space
+var s = @zeros([MAX_ZDIM]f32); // can align with r
+var t = @zeros([MAX_ZDIM]f32); // t = A * s
+
+// Exposed to host via memcpy.
+var xi = @zeros([1]f32);
+var rho = @zeros([1]f32);
+
+// stencil coefficients: {c_west, c_east, c_south, c_north, c_bottom, c_top, c_center}
+var stencil_coeff = @zeros([7]f32);
+
+var time_buf_u16 = @zeros([timestamp.tsc_size_words*2]u16);
+var time_ref_u16 = @zeros([timestamp.tsc_size_words]u16);
+
+var ptr_b: [*]f32 = &b;
+var ptr_x: [*]f32 = &x;
+var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_time_buf_u16: [*]u16 = &time_buf_u16;
+var ptr_time_ref: [*]u16 = &time_ref_u16;
+var ptr_rho: [*]f32 = &rho;
+var ptr_xi: [*]f32 = &xi;
+
+// Args from RPC entry to async task. Must be globals because the entry
+// function returns before the task body runs.
+var n: i16 = 0;
+var tol: f32 = @as(f32, 0);
+var max_ite: i16 = 0;
+var do_sync: bool = false;
+
+var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b[i] });
+var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
+var mem_r0_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r0[i] });
+var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
+var mem_p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> p[i] });
+var mem_v_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> v[i] });
+var mem_s_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> s[i] });
+var mem_t_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> t[i] });
+
+fn f_enable_timer() void {
+    timestamp.enable_tsc();
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_tic() void {
+    timestamp.get_timestamp(&tscStartBuffer);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_toc() void {
+    timestamp.get_timestamp(&tscEndBuffer);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_memcpy_timestamps() void {
+    time_buf_u16[0] = tscStartBuffer[0];
+    time_buf_u16[1] = tscStartBuffer[1];
+    time_buf_u16[2] = tscStartBuffer[2];
+    time_buf_u16[3] = tscEndBuffer[0];
+    time_buf_u16[4] = tscEndBuffer[1];
+    time_buf_u16[5] = tscEndBuffer[2];
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_sync() void {
+    do_sync = true;
+    @activate(STATE);
+}
+
+fn f_bicgstab(size: i16, tol_val: f32, max_ite_val: i16) void {
+    n = size;
+    tol = tol_val;
+    max_ite = max_ite_val;
+    do_sync = false;
+    @activate(STATE);
+}
+
+async task f_state() void {
+    if (do_sync) {
+        var dot: f32 = 0.0;
+        @await(reduce_mod.allreduce(1, @ptrcast([*]f32, &dot), reduce_mod.TYPE_BINARY_OP.ADD));
+    } else {
+        timestamp.get_timestamp(&tscStartBuffer);
+        // BiCGSTAB initialisation: setup DSD lengths
+        mem_b_dsd  = @set_dsd_length(mem_b_dsd,  @bitcast(u16, n));
+        mem_x_dsd  = @set_dsd_length(mem_x_dsd,  @bitcast(u16, n));
+        mem_r0_dsd = @set_dsd_length(mem_r0_dsd, @bitcast(u16, n));
+        mem_r_dsd  = @set_dsd_length(mem_r_dsd,  @bitcast(u16, n));
+        mem_p_dsd  = @set_dsd_length(mem_p_dsd,  @bitcast(u16, n));
+        mem_v_dsd  = @set_dsd_length(mem_v_dsd,  @bitcast(u16, n));
+        mem_s_dsd  = @set_dsd_length(mem_s_dsd,  @bitcast(u16, n));
+        mem_t_dsd  = @set_dsd_length(mem_t_dsd,  @bitcast(u16, n));
+
+        // v = A*x0
+        @await(stencil_mod.spmv(n, &stencil_coeff, &x, &v));
+
+        // r0 = b - v; r = r0; p = r0; xi = |r0|^2
+        @fsubs(mem_r0_dsd, mem_b_dsd, mem_v_dsd);
+        @fmovs(mem_r_dsd, mem_r0_dsd);
+        @fmovs(mem_p_dsd, mem_r0_dsd);
+        xi[0] = blas_lib.dot(n, &r, &r);
+        @await(reduce_mod.allreduce(1, @ptrcast([*]f32, &xi), reduce_mod.TYPE_BINARY_OP.ADD));
+
+        // rho = xi
+        rho[0] = xi[0];
+
+        var k: i16 = 0;
+        var alpha: f32 = @as(f32, 0);
+        var w: f32 = @as(f32, 0);
+        while ((xi[0] > tol*tol) and (k < max_ite)) {
+            k = k + 1;
+
+            // v = A*p
+            @await(stencil_mod.spmv(n, &stencil_coeff, &p, &v));
+
+            // r0_dot_v = dot(r0, v) + allreduce
+            var r0_dot_v: f32 = blas_lib.dot(n, &r0, &v);
+            @await(reduce_mod.allreduce(1, @ptrcast([*]f32, &r0_dot_v), reduce_mod.TYPE_BINARY_OP.ADD));
+
+            // alpha = rho / (r0, v); s = r - alpha*v; t = A*s
+            alpha = rho[0] / r0_dot_v;
+            const alpha_minus: f32 = -alpha;
+            @fmacs(mem_s_dsd, mem_r_dsd, mem_v_dsd, alpha_minus);
+            @await(stencil_mod.spmv(n, &stencil_coeff, &s, &t));
+
+            // t_dot_s
+            var t_dot_s: f32 = blas_lib.dot(n, &t, &s);
+            @await(reduce_mod.allreduce(1, @ptrcast([*]f32, &t_dot_s), reduce_mod.TYPE_BINARY_OP.ADD));
+
+            // t_dot_t
+            var t_dot_t: f32 = blas_lib.dot(n, &t, &t);
+            @await(reduce_mod.allreduce(1, @ptrcast([*]f32, &t_dot_t), reduce_mod.TYPE_BINARY_OP.ADD));
+
+            // w = (t,s)/(t,t); x += alpha*p + w*s; r = s - w*t; rho_old = rho; rho = (r0,r)
+            w = t_dot_s / t_dot_t;
+            @fmacs(mem_x_dsd, mem_x_dsd, mem_p_dsd, alpha);
+            @fmacs(mem_x_dsd, mem_x_dsd, mem_s_dsd, w);
+            const w_minus: f32 = -w;
+            @fmacs(mem_r_dsd, mem_s_dsd, mem_t_dsd, w_minus);
+            const rho_old: f32 = rho[0];
+            rho[0] = blas_lib.dot(n, &r0, &r);
+            @await(reduce_mod.allreduce(1, @ptrcast([*]f32, &rho), reduce_mod.TYPE_BINARY_OP.ADD));
+
+            // beta = (rho/rho_old)*(alpha/w); p = r + beta*(p - w*v); xi = (r,r)
+            const beta: f32 = (rho[0] / rho_old) * (alpha / w);
+            @fmacs(mem_p_dsd, mem_p_dsd, mem_v_dsd, w_minus);
+            @fmacs(mem_p_dsd, mem_r_dsd, mem_p_dsd, beta);
+            xi[0] = blas_lib.dot(n, &r, &r);
+            @await(reduce_mod.allreduce(1, @ptrcast([*]f32, &xi), reduce_mod.TYPE_BINARY_OP.ADD));
+        }
+    }
+
+    timestamp.get_timestamp(&tscEndBuffer);
+    sys_mod.unblock_cmd_stream();
+}
+
+fn f_reference_timestamps() void {
+    time_ref_u16[0] = reduce_mod.tscRefBuffer[0];
+    time_ref_u16[1] = reduce_mod.tscRefBuffer[1];
+    time_ref_u16[2] = reduce_mod.tscRefBuffer[2];
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @bind_local_task(f_state, STATE);
+}
+
+fn f_init() void {
+    @coro_runtime_init();
+    sys_mod.unblock_cmd_stream();
+}
+
+comptime {
+    @export_symbol(ptr_b, "b");
+    @export_symbol(ptr_x, "x");
+    @export_symbol(ptr_stencil_coeff, "stencil_coeff");
+    @export_symbol(ptr_time_buf_u16, "time_buf_u16");
+    @export_symbol(ptr_time_ref, "time_ref");
+    @export_symbol(ptr_rho, "rho");
+    @export_symbol(ptr_xi, "xi");
+}
+
+comptime {
+    @export_symbol(f_enable_timer);
+    @export_symbol(f_tic);
+    @export_symbol(f_toc);
+    @export_symbol(f_memcpy_timestamps);
+    @export_symbol(f_init);
+    @export_symbol(f_sync);
+    @export_symbol(f_bicgstab);
+    @export_symbol(f_reference_timestamps);
+}

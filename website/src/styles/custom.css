@@ -1,0 +1,165 @@
+/* Colours. Blue is for navigation and links only. Two colours carry meaning
+   on every page: orange marks csl++, what the frontend adds; teal marks
+   vanilla CSL and cslc, what exists. */
+:root {
+  --sl-color-accent-low: #142a4a;
+  --sl-color-accent: #4c8ee8;
+  --sl-color-accent-high: #bcd7fb;
+  --cpp-orange: #f08c2e;
+  --cpp-orange-bg: #3a2a14;
+  --cpp-teal: #2bb3a3;
+  --cpp-teal-bg: #11332f;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #d8e7fc;
+  --sl-color-accent: #1f63c4;
+  --sl-color-accent-high: #12346a;
+  --cpp-orange: #d9731a;
+  --cpp-orange-bg: #fdeedd;
+  --cpp-teal: #1d9384;
+  --cpp-teal-bg: #ddf3f0;
+}
+
+/* Starlight limits the content of a documentation page to a reading width
+   and fills the rest of the row with the table of contents. The start page
+   has no table of contents, so it gets the width Starlight uses for pages
+   without a sidebar. */
+html[data-has-hero] {
+  --sl-content-width: 67.5rem;
+}
+
+/* The hero of the start page. */
+.hero {
+  padding-block: 2rem 0.5rem;
+}
+
+.hero .tagline code {
+  font-size: 0.85em;
+}
+
+/* Two code blocks side by side, each under a label that names its
+   language: CSL (teal) or csl++ (orange). */
+.compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1rem;
+}
+
+.compare > div > * + * {
+  margin-top: 0.5rem;
+}
+
+.label {
+  display: inline-block;
+  margin: 0;
+  padding: 0.1rem 0.6rem;
+  border-radius: 0.3rem;
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: white;
+}
+
+.label.csl {
+  background: var(--cpp-teal);
+}
+
+.label.cslpp {
+  background: var(--cpp-orange);
+}
+
+/* Short cards in a row, with a coloured top edge. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 1rem;
+  margin-top: 2.5rem;
+}
+
+.card {
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-top: 4px solid var(--card-color, var(--sl-color-gray-4));
+  border-radius: 0.5rem;
+  background: var(--sl-color-gray-7, var(--sl-color-bg));
+}
+
+.card.cslpp {
+  --card-color: var(--cpp-orange);
+}
+
+.card.csl {
+  --card-color: var(--cpp-teal);
+}
+
+.card > h3 {
+  margin-top: 0;
+  font-size: var(--sl-text-lg);
+}
+
+.card > p {
+  font-size: var(--sl-text-sm);
+  margin-top: 0.5rem;
+}
+
+/* Numbered steps. */
+.steps {
+  counter-reset: step;
+  list-style: none;
+  padding: 0;
+}
+
+.steps > li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 2.6rem;
+  margin-top: 0.75rem;
+}
+
+.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  background: var(--cpp-orange);
+  color: white;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.steps > li > p {
+  margin-top: 0;
+}
+
+.credit {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--sl-color-gray-5);
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-2);
+}
+
+/* A language extension on the start page: an orange bar, a heading, then
+   text and code. */
+.feature {
+  border-inline-start: 4px solid var(--cpp-orange);
+  padding-inline-start: 1.25rem;
+  margin-block: 2rem;
+}
+
+.feature > h2,
+.feature > h3 {
+  margin-top: 0;
+}
+
+.feature > p:last-child {
+  margin-top: 0.75rem;
+}

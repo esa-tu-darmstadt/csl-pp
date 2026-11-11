@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Run the pinned SDK's lit with the standalone build's suite configurations."""
+import os
+import sys
+
+sys.path.insert(0, r"@CSL_LLVM_LIT_DIR@")
+from lit.main import main
+
+source = r"@CSL_MLIR_SOURCE_DIR@/test"
+binary = r"@CSL_MLIR_BINARY_DIR@/test"
+config_map = {
+    os.path.normcase(os.path.abspath(os.path.join(source, suite, "lit.cfg.py"))):
+        os.path.join(binary, suite, "lit.site.cfg.py")
+    for suite in ("", "Unit", "Integration")
+}
+
+if __name__ == "__main__":
+    main({"config_map": config_map})

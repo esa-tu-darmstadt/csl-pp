@@ -1,0 +1,82 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false \
+// RUN:   | FileCheck %s
+//
+// Builtins such as @get_dsd take a configuration struct literal. Like cslc,
+// the literal takes its type from the configuration: each field is coerced
+// to the type of that field, e.g. the stride of a mem1d_dsd to i8 and the
+// strides of a mem4d_dsd to i16. A literal mixing runtime values and comptime
+// numbers thus has a runtime type. Fields that do not exist, do not coerce,
+// or must be comptime-known but are not are reported, as cslc does.
+
+var buf: [10]f32;
+var n: u16 = 5;
+
+// CHECK-LABEL: export fn f() void {
+// CHECK:         @get_dsd(mem1d_dsd, .{ .base_address = &buf, .extent = n, .stride = @as(i8, -1) });
+// CHECK:         @get_dsd(mem4d_dsd, .{ .base_address = &buf, .extent = .{ n, @as(u16, 1), @as(u16, 1), @as(u16, 1) }, .stride = .{ @as(i16, 1), @as(i16, n), @as(i16, 0), @as(i16, 0) } });
+export fn f() void {
+  const d1 = @get_dsd(mem1d_dsd, .{ .base_address = &buf, .extent = n, .stride = -1 });
+  const d4 = @get_dsd(mem4d_dsd, .{ .base_address = &buf,
+                                    .extent = .{ n, 1, 1, 1 },
+                                    .stride = .{ 1, @as(i16, n), 0, 0 } });
+  @fmovs(d1, d4);
+}
+
+// -----
+
+var buf: [10]f32;
+
+export fn f() void {
+  // expected-error @+1 {{'strde' is not a field of the configuration of a mem1d_dsd; its fields on WSE-2 are base_address, extent, stride, offset, tensor_access, wavelet_index_offset}}
+  const d = @get_dsd(mem1d_dsd, .{ .base_address = &buf, .extent = 4, .strde = 2 });
+  @fmovs(d, 1.0);
+}
+
+// -----
+
+var buf: [10]f32;
+var s: i16 = 2;
+
+export fn f() void {
+  // expected-error @+1 {{field 'stride' of the configuration of a mem1d_dsd has type 'i16', which does not coerce to 'i8'; convert it with `@as(i8, ...)`}}
+  const d = @get_dsd(mem1d_dsd, .{ .base_address = &buf, .extent = 4, .stride = s });
+  @fmovs(d, 1.0);
+}
+
+// -----
+
+var n: u16 = 4;
+
+export fn f() void {
+  // expected-error @+1 {{field 'extent' of the configuration of a fabout_dsd must be known at compile time}}
+  const d = @get_dsd(fabout_dsd, .{ .extent = n, .output_queue = @get_output_queue(2) });
+  @fmovs(d, 1.0);
+}
+
+// -----
+
+export fn f() void {
+  // expected-error @+1 {{'priority' is not a field of the configuration of a fabout_dsd on WSE-2; its fields on WSE-2 are extent, output_queue, fabric_color, control, wavelet_index_offset, advance_switch, simd_mode, zero, control_transform}}
+  const d = @get_dsd(fabout_dsd, .{ .extent = 4, .fabric_color = @get_color(3), .priority = .{ .high = true } });
+  @fmovs(d, 1.0);
+}
+
+// -----
+
+var buf: [10]f32;
+
+export fn f() void {
+  const d = @get_dsd(mem1d_dsd, .{ .base_address = &buf, .extent = 4 });
+  // expected-error @+1 {{'bogus' is not a field of the configuration of a DSD operation; its fields on WSE-2 are async, activate, unblock, on_control, priority, index}}
+  @fmovs(d, 1.0, .{ .async = true, .bogus = 1 });
+}
+
+// -----
+
+// The SIMD modes differ between the architectures.
+
+export fn f() void {
+  // expected-error @+1 {{'simd_off' is not a field of the SIMD mode on WSE-2; its fields on WSE-2 are simd_32, simd_64, simd_32_or_64, simd_16}}
+  const d = @get_dsd(fabout_dsd, .{ .extent = 4, .fabric_color = @get_color(3), .simd_mode = .{ .simd_off = true } });
+  @fmovs(d, 1.0);
+}

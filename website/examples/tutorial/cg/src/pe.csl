@@ -1,0 +1,141 @@
+// PE program of the conjugate gradient solver. Each PE holds n points of
+// the grid in z; the matrix A is a 7-point stencil over the whole grid.
+param memcpy_params;
+param stencil_params;
+param reduce_params;
+param MAX_ZDIM: i16;    // capacity of the local vectors
+param BLOCK_SIZE: i16;  // points the stencil exchanges with a neighbor at a time
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// region: imports
+// y = A x over the grid, and reductions over all PEs. The libraries claim
+// the queues and task IDs they need; only the DSRs are assigned here.
+const stencil = @import_module("stencil_3d_7pts/pe.csl", .{
+  .stencil_params = stencil_params,
+  .BLOCK_SIZE = BLOCK_SIZE,
+  .output_ut_id = 7,
+  .dsr_ids = [2]u16{2, 3},
+});
+const reduce = @import_module("allreduce/pe.csl", .{
+  .reduce_params = reduce_params,
+  .dsr_id = 1,
+});
+// endregion
+
+const cg_task_id: local_task_id = @claim_local_task();
+
+// The local parts of the vectors of the algorithm.
+var b = @zeros([MAX_ZDIM]f32);  // right-hand side
+var x = @zeros([MAX_ZDIM]f32);  // initial guess, then the solution
+var p = @zeros([MAX_ZDIM]f32);  // search direction
+var w = @zeros([MAX_ZDIM]f32);  // A p
+var r = @zeros([MAX_ZDIM]f32);  // residual
+
+// The stencil coefficients of this PE: west, east, south, north, bottom,
+// top, center.
+var stencil_coeff = @zeros([7]f32);
+
+// |r|^2 over all PEs, read back by the host after the solve.
+var rho = @zeros([1]f32);
+
+var ptr_b: [*]f32 = &b;
+var ptr_x: [*]f32 = &x;
+var ptr_stencil_coeff: [*]f32 = &stencil_coeff;
+var ptr_rho: [*]f32 = &rho;
+
+// The arguments of solve(), kept for the task.
+var n: i16 = 0;
+var tol: f32 = 0.0;
+var max_ite: i16 = 0;
+
+var mem_b_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> b[i] });
+var mem_x_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> x[i] });
+var mem_p_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> p[i] });
+var mem_w_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> w[i] });
+var mem_r_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> r[i] });
+
+// region: dot
+// The local part of a dot product; the parts are summed over all PEs with
+// an allreduce.
+fn add_product(u_i: f32, v_i: f32, sum: *f32) f32 {
+  return sum.* + u_i * v_i;
+}
+
+fn dot(u: mem1d_dsd, v: mem1d_dsd) f32 {
+  var sum: f32 = 0.0;
+  @map(add_product, u, v, &sum, &sum);
+  return sum;
+}
+// endregion
+
+// region: solver
+async task cg_task() void {
+  // r = b - A x, rho = r.r
+  @await(stencil.spmv(n, &stencil_coeff, &x, &w));
+  @fsubs(mem_r_dsd, mem_b_dsd, mem_w_dsd);
+  rho[0] = dot(mem_r_dsd, mem_r_dsd);
+  @await(reduce.allreduce(1, &rho, reduce.TYPE_BINARY_OP.ADD));
+
+  var k: i16 = 0;
+  var rho_old: f32 = 0.0;
+  while (rho[0] > tol * tol and k < max_ite) {
+    k += 1;
+
+    // p = r + beta p, with p = r in the first iteration
+    if (k == 1) {
+      @fmovs(mem_p_dsd, mem_r_dsd);
+    } else {
+      const beta: f32 = rho[0] / rho_old;
+      @fmacs(mem_p_dsd, mem_r_dsd, mem_p_dsd, beta);
+    }
+
+    // w = A p, eta = p.w
+    @await(stencil.spmv(n, &stencil_coeff, &p, &w));
+    var eta: f32 = dot(mem_p_dsd, mem_w_dsd);
+    @await(reduce.allreduce(1, @ptrcast([*]f32, &eta), reduce.TYPE_BINARY_OP.ADD));
+
+    // x += alpha p, r -= alpha w, rho = r.r
+    const alpha: f32 = rho[0] / eta;
+    @fmacs(mem_x_dsd, mem_x_dsd, mem_p_dsd, alpha);
+    @fmacs(mem_r_dsd, mem_r_dsd, mem_w_dsd, -alpha);
+    rho_old = rho[0];
+    rho[0] = dot(mem_r_dsd, mem_r_dsd);
+    @await(reduce.allreduce(1, &rho, reduce.TYPE_BINARY_OP.ADD));
+  }
+
+  sys_mod.unblock_cmd_stream();
+}
+// endregion
+
+// region: launch
+// Called by the host: solves A x = b for the first size points of each
+// PE, until |r| <= tol or max_ite iterations.
+fn solve(size: i16, tol_val: f32, max_ite_val: i16) void {
+  n = size;
+  tol = tol_val;
+  max_ite = max_ite_val;
+
+  const length: u16 = @bitcast(u16, n);
+  mem_b_dsd = @set_dsd_length(mem_b_dsd, length);
+  mem_x_dsd = @set_dsd_length(mem_x_dsd, length);
+  mem_p_dsd = @set_dsd_length(mem_p_dsd, length);
+  mem_w_dsd = @set_dsd_length(mem_w_dsd, length);
+  mem_r_dsd = @set_dsd_length(mem_r_dsd, length);
+
+  @coro_runtime_init();
+  @activate(cg_task_id);
+}
+
+comptime {
+  @bind_local_task(cg_task, cg_task_id);
+}
+// endregion
+
+comptime {
+  @export_symbol(ptr_b, "b");
+  @export_symbol(ptr_x, "x");
+  @export_symbol(ptr_stencil_coeff, "stencil_coeff");
+  @export_symbol(ptr_rho, "rho");
+  @export_symbol(solve);
+}

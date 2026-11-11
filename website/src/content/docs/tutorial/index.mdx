@@ -1,0 +1,56 @@
+---
+title: The program
+description: The conjugate gradient solver that the tutorial builds, and the libraries it uses.
+sidebar:
+  order: 0
+---
+
+The tutorial writes a solver for a linear system on the wafer. It is the conjugate gradient benchmark of the Cerebras SDK, written in csl++ with the [libraries](../libraries/) of csl++. The complete program is in `website/examples/tutorial/cg` of the repository.
+
+The tutorial assumes that you know CSL as taught in the [tutorials of the Cerebras SDK](https://sdk.cerebras.ai): layout files, DSDs, colors, routes and memcpy.
+
+## The algorithm
+
+Conjugate gradient solves *A x = b* for a symmetric positive definite matrix *A*. Starting from a guess *x*, it improves *x* along search directions *p* until the residual *r = b − A x* is small:
+
+```
+r = b − A x
+p = r
+ρ = r · r
+while ρ > tol² and k < max_ite:
+    w = A p
+    α = ρ / (p · w)
+    x = x + α p
+    r = r − α w
+    ρ' = r · r
+    p = r + (ρ' / ρ) p
+    ρ = ρ'
+```
+
+## The program on the wafer
+
+The unknowns are the points of a three-dimensional grid, and *A* is a 7-point stencil: the value of *A x* at a point is a weighted sum of the point and its six neighbors. The grid is distributed over a rectangle of PEs so that each PE holds a column of *n* points in z; the neighbors of a point in x and y are on the neighboring PEs.
+
+Each line of the algorithm then has a cost on the wafer:
+
+- *A p* is a stencil over the whole grid. Each PE exchanges its column with its four neighbors and applies the stencil locally. The library [`stencil_3d_7pts`](../libraries/stencil_3d_7pts/) does this.
+- *r · r* and *p · w* are dot products over the whole grid: a local dot product on every PE, followed by a sum over all PEs. The library [`allreduce`](../libraries/allreduce/) does the sum.
+- The vector updates are local DSD operations.
+
+Each PE runs the loop above on its part of the vectors. Two library calls per iteration involve the fabric; everything else is local.
+
+## The files
+
+| File | Content |
+| --- | --- |
+| `src/layout.csl` | The rectangle of PEs; imports the layout parts of the libraries. |
+| `src/pe.csl` | The PE program with the solver loop. |
+| `run.py` | The host program: writes *b* and the stencil coefficients, runs the solver, checks *x*. |
+| `commands_wse2.sh`, `commands_wse3.sh` | Compile for WSE-2 or WSE-3 and run on the simulator. |
+
+The steps of the tutorial:
+
+1. [The solver loop](1-solver/) writes the algorithm as an async task.
+2. [Inside a library](2-library/) shows how an async function suspends.
+3. [Resources](3-resources/) shows what the libraries claim and what the program does not have to.
+4. [Run it](4-run/) compiles and runs the program.

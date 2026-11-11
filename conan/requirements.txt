@@ -1,0 +1,4 @@
+conan==2.32.0
+cmake==3.31.6
+ninja==1.13.0
+psutil==7.0.0

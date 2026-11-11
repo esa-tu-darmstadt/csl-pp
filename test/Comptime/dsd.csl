@@ -1,0 +1,595 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// mem1d_dsd - Basic tensor access expressions
+// =============================================================================
+
+var arr1: [10]u16;
+const dsd1 = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{10} -> arr1[i]
+});
+
+comptime {
+    // expected-remark @+1 {{mem1d_dsd}}
+    @comptime_print(@type_of(dsd1));
+}
+
+// -----
+
+// =============================================================================
+// mem1d_dsd - Stride and offset value assertions
+// =============================================================================
+
+var arr2: [20]u16;
+
+// Simple case: stride=1, offset=0
+const tae_simple = |i|{10} -> arr2[i];
+// Stride of 2: stride=2, offset=0
+const tae_stride2 = |i|{5} -> arr2[2 * i];
+// Stride and offset: stride=2, offset=1
+const tae_stride_offset = |i|{5} -> arr2[2 * i + 1];
+// Constant index (reduction): stride=0, offset=0
+const tae_const_idx = |i|{10} -> arr2[0];
+// Constant index with offset: stride=0, offset=5
+const tae_const_offset = |i|{10} -> arr2[5];
+
+comptime {
+    // Simple case
+    // expected-remark @+1 {{10}}
+    @comptime_print(tae_simple.extent);
+    // expected-remark @+1 {{1}}
+    @comptime_print(tae_simple.stride);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae_simple.offset);
+
+    // Stride of 2
+    // expected-remark @+1 {{5}}
+    @comptime_print(tae_stride2.extent);
+    // expected-remark @+1 {{2}}
+    @comptime_print(tae_stride2.stride);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae_stride2.offset);
+
+    // Stride and offset
+    // expected-remark @+1 {{5}}
+    @comptime_print(tae_stride_offset.extent);
+    // expected-remark @+1 {{2}}
+    @comptime_print(tae_stride_offset.stride);
+    // expected-remark @+1 {{1}}
+    @comptime_print(tae_stride_offset.offset);
+
+    // Constant index
+    // expected-remark @+1 {{10}}
+    @comptime_print(tae_const_idx.extent);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae_const_idx.stride);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae_const_idx.offset);
+
+    // Constant index with offset
+    // expected-remark @+1 {{10}}
+    @comptime_print(tae_const_offset.extent);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae_const_offset.stride);
+    // expected-remark @+1 {{5}}
+    @comptime_print(tae_const_offset.offset);
+}
+
+// -----
+
+// =============================================================================
+// mem1d_dsd - Multi-dimensional array access (diagonal)
+// Array [20,20] with row-major strides [20,1]
+// Diagonal: delta[i] = 20 + 1 = 21
+// =============================================================================
+
+var arr_diag: [20, 20]u16;
+const tae_diag = |i|{10} -> arr_diag[i, i];
+
+comptime {
+    // expected-remark @+1 {{10}}
+    @comptime_print(tae_diag.extent);
+    // expected-remark @+1 {{21}}
+    @comptime_print(tae_diag.stride);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae_diag.offset);
+}
+
+// -----
+
+// =============================================================================
+// mem1d_dsd - With wavelet_index_offset
+// =============================================================================
+
+var arr_wio: [10]u16;
+const dsd_wio = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{10} -> arr_wio[i],
+    .wavelet_index_offset = true
+});
+
+comptime {
+    // expected-remark @+1 {{mem1d_dsd}}
+    @comptime_print(@type_of(dsd_wio));
+}
+
+// -----
+
+// =============================================================================
+// mem1d_dsd - Explicit properties (no tensor_access)
+// =============================================================================
+
+var arr_explicit: [10]i16;
+const dsd_explicit = @get_dsd(mem1d_dsd, .{
+    .base_address = &arr_explicit,
+    .extent = 10,
+    .stride = 2,
+    .offset = 5
+});
+
+comptime {
+    // expected-remark @+1 {{mem1d_dsd}}
+    @comptime_print(@type_of(dsd_explicit));
+}
+
+// -----
+
+// =============================================================================
+// mem4d_dsd - 2D tensor access with CSL stride formula
+// Array [10,5] with row-major strides [5,1]
+// |i,j|{5,5} -> arr[i,j]: delta[i]=5, delta[j]=1
+// CSL stride[j] = 1
+// CSL stride[i] = 5 - 1*(5-1) = 1
+// =============================================================================
+
+var arr2d: [10, 5]u16;
+const tae2d = |i, j|{5, 5} -> arr2d[i, j];
+
+comptime {
+    // expected-remark @+1 {{.{ 5, 5 }}}
+    @comptime_print(tae2d.extent);
+    // Strides in innermost-first order (j, i)
+    // expected-remark @+1 {{.{ 1, 1 }}}
+    @comptime_print(tae2d.stride);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae2d.offset);
+}
+
+const dsd2d = @get_dsd(mem4d_dsd, .{ .tensor_access = tae2d });
+
+comptime {
+    // expected-remark @+1 {{mem4d_dsd}}
+    @comptime_print(@type_of(dsd2d));
+}
+
+// -----
+
+// =============================================================================
+// mem4d_dsd - Linearized 2D access to 1D array
+// |i,j|{5,5} -> arr[2*i + j]: delta[i]=2, delta[j]=1
+// CSL stride[j] = 1
+// CSL stride[i] = 2 - 1*(5-1) = -2
+// =============================================================================
+
+var arr_linear: [25]u16;
+const tae_linear = |i, j|{5, 5} -> arr_linear[2 * i + j];
+
+comptime {
+    // expected-remark @+1 {{.{ 5, 5 }}}
+    @comptime_print(tae_linear.extent);
+    // Strides in innermost-first order (j, i): stride[j]=1, stride[i]=-2
+    // expected-remark @+1 {{.{ 1, -2 }}}
+    @comptime_print(tae_linear.stride);
+    // expected-remark @+1 {{0}}
+    @comptime_print(tae_linear.offset);
+}
+
+// -----
+
+// =============================================================================
+// mem4d_dsd - 2D with constant offset
+// Array [10,10] with row-major strides [10,1]
+// |i,j|{5,5} -> arr[i, j+2]: delta[i]=10, delta[j]=1
+// CSL stride[j] = 1
+// CSL stride[i] = 10 - 1*(5-1) = 6
+// Constant offset from "+2" = 2
+// =============================================================================
+
+var arr_offset2d: [10, 10]u16;
+const tae_offset2d = |i, j|{5, 5} -> arr_offset2d[i, j + 2];
+
+comptime {
+    // expected-remark @+1 {{.{ 5, 5 }}}
+    @comptime_print(tae_offset2d.extent);
+    // Strides in innermost-first order (j, i): stride[j]=1, stride[i]=6
+    // expected-remark @+1 {{.{ 1, 6 }}}
+    @comptime_print(tae_offset2d.stride);
+    // expected-remark @+1 {{2}}
+    @comptime_print(tae_offset2d.offset);
+}
+
+// -----
+
+// =============================================================================
+// mem4d_dsd - 4 induction variables on a 2D array, with non-zero constant offset
+// Array [4, 5]i16 (row-major), linear index = (i+j)*5 + (k+l+2)
+// Deltas (outermost first): i→5, j→5, k→1, l→1; constant element offset = 2
+// Strides (reset-accumulate, innermost first):
+//   l: 1
+//   k: 1 - 1*(5-1) = -3
+//   j: 5 - 1*(5-1) - 1*(5-1) = -3
+//   i: 5 - 5*(5-1) - 1*(5-1) - 1*(5-1) = -23
+// Offset in 2-byte hardware units: 2 elements * 2 bytes/elem / 2 = 2
+// =============================================================================
+
+var Aha_i16: [4, 5]i16;
+const tae_4d_i16 = |i, j, k, l|{5, 5, 5, 5} -> Aha_i16[i + j, k + l + 2];
+
+comptime {
+    // expected-remark @+1 {{.{ 5, 5, 5, 5 }}}
+    @comptime_print(tae_4d_i16.extent);
+    // expected-remark @+1 {{.{ 1, -3, -3, -23 }}}
+    @comptime_print(tae_4d_i16.stride);
+    // expected-remark @+1 {{2}}
+    @comptime_print(tae_4d_i16.offset);
+}
+
+// -----
+
+// =============================================================================
+// mem4d_dsd - Same access on i32 array: offset scales to 4
+// Offset in 2-byte hardware units: 2 elements * 4 bytes/elem / 2 = 4
+// =============================================================================
+
+var Aha_i32: [4, 5]i32;
+const tae_4d_i32 = |i, j, k, l|{5, 5, 5, 5} -> Aha_i32[i + j, k + l + 2];
+
+comptime {
+    // expected-remark @+1 {{.{ 5, 5, 5, 5 }}}
+    @comptime_print(tae_4d_i32.extent);
+    // expected-remark @+1 {{.{ 1, -3, -3, -23 }}}
+    @comptime_print(tae_4d_i32.stride);
+    // expected-remark @+1 {{4}}
+    @comptime_print(tae_4d_i32.offset);
+}
+
+// -----
+
+// =============================================================================
+// mem4d_dsd - Full 4D tensor access
+// =============================================================================
+
+var arr4d: [2, 3, 4, 5]u16;
+const tae4d = |i, j, k, l|{2, 3, 4, 5} -> arr4d[i, j, k, l];
+
+comptime {
+    // expected-remark @+1 {{.{ 2, 3, 4, 5 }}}
+    @comptime_print(tae4d.extent);
+}
+
+const dsd4d = @get_dsd(mem4d_dsd, .{ .tensor_access = tae4d });
+
+comptime {
+    // expected-remark @+1 {{mem4d_dsd}}
+    @comptime_print(@type_of(dsd4d));
+}
+
+// -----
+
+// =============================================================================
+// mem4d_dsd - Explicit properties with stride tuple
+// =============================================================================
+
+var arr_explicit4d: [20]i16;
+const dsd_explicit4d = @get_dsd(mem4d_dsd, .{
+    .base_address = &arr_explicit4d,
+    .extent = .{5, 5},
+    .stride = .{1, -2}
+});
+
+comptime {
+    // expected-remark @+1 {{mem4d_dsd}}
+    @comptime_print(@type_of(dsd_explicit4d));
+}
+
+// -----
+
+// =============================================================================
+// fabin_dsd - Fabric input
+// =============================================================================
+
+const trigger = @get_color(0);
+const fabin = @get_dsd(fabin_dsd, .{
+    .extent = 5,
+    .fabric_color = trigger
+});
+
+comptime {
+    // expected-remark @+1 {{fabin_dsd}}
+    @comptime_print(@type_of(fabin));
+}
+
+// -----
+
+// =============================================================================
+// fabin_dsd - With input_queue (a priority only exists on WSE-3)
+// =============================================================================
+
+const fabin_full = @get_dsd(fabin_dsd, .{
+    .extent = 10,
+    .fabric_color = @get_color(1),
+    .input_queue = @get_input_queue(0)
+});
+
+comptime {
+    // expected-remark @+1 {{fabin_dsd}}
+    @comptime_print(@type_of(fabin_full));
+}
+
+// -----
+
+// =============================================================================
+// fabin_dsd - Queue-only WSE-3 form
+// =============================================================================
+
+const fabin_queue = @get_dsd(fabin_dsd, .{
+    .extent = 10,
+    .input_queue = @get_input_queue(0)
+});
+
+comptime {
+    // expected-remark @+1 {{fabin_dsd}}
+    @comptime_print(@type_of(fabin_queue));
+}
+
+// -----
+
+// =============================================================================
+// fabout_dsd - Fabric output
+// =============================================================================
+
+const fabout = @get_dsd(fabout_dsd, .{
+    .extent = 1024,
+    .fabric_color = @get_color(2)
+});
+
+comptime {
+    // expected-remark @+1 {{fabout_dsd}}
+    @comptime_print(@type_of(fabout));
+}
+
+// -----
+
+// =============================================================================
+// fabout_dsd - With control wavelet and output_queue
+// =============================================================================
+
+const fabout_full = @get_dsd(fabout_dsd, .{
+    .extent = 10,
+    .fabric_color = @get_color(3),
+    .output_queue = @get_output_queue(0),
+    .control = true,
+    .wavelet_index_offset = true
+});
+
+comptime {
+    // expected-remark @+1 {{fabout_dsd}}
+    @comptime_print(@type_of(fabout_full));
+}
+
+// -----
+
+// =============================================================================
+// fabout_dsd - Queue-only WSE-3 form
+// =============================================================================
+
+const fabout_queue = @get_dsd(fabout_dsd, .{
+    .extent = 10,
+    .output_queue = @get_output_queue(0)
+});
+
+comptime {
+    // expected-remark @+1 {{fabout_dsd}}
+    @comptime_print(@type_of(fabout_queue));
+}
+
+// -----
+
+// =============================================================================
+// fifo_dsd - Basic FIFO allocation
+// =============================================================================
+
+var fifo_buf: [32]i16;
+const fifo = @allocate_fifo(fifo_buf);
+
+comptime {
+    // expected-remark @+1 {{fifo_handle}}
+    @comptime_print(@type_of(fifo));
+}
+
+// -----
+
+// =============================================================================
+// fifo_dsd - With priority and task handlers
+// =============================================================================
+
+task push_task() void {}
+task pop_task() void {}
+
+var fifo_buf2: [64]i16;
+const fifo_full = @allocate_fifo(fifo_buf2, .{
+    .priority = .{ .high = true },
+    .activate_push = push_task,
+    .activate_pop = pop_task
+});
+
+comptime {
+    // expected-remark @+1 {{fifo_handle}}
+    @comptime_print(@type_of(fifo_full));
+}
+
+// -----
+
+// =============================================================================
+// tensor_access const base is allowed
+// =============================================================================
+
+const const_arr: [10]u16 = @zeros([10]u16);
+comptime {
+    const good = |i|{10} -> const_arr[i];
+    // expected-remark @+1 {{&const_arr}}
+    @comptime_print(good.base_address);
+}
+
+// -----
+
+// =============================================================================
+// ERROR: tensor_access extent must be comptime-known
+// =============================================================================
+
+var arr_runtime: [20]u16;
+
+fn get_runtime_extent() u16 {
+    return 10;
+}
+
+export fn test_runtime_extent() void {
+    const n = get_runtime_extent();
+    // expected-error @+1 {{tensor_access extent must be comptime-known}}
+    const bad = |i|{n} -> arr_runtime[i];
+}
+
+// -----
+
+// =============================================================================
+// ERROR: @get_dsd requires tensor_access or explicit properties for mem DSDs
+// =============================================================================
+
+comptime {
+    // expected-error @+1 {{mem1d_dsd requires tensor_access or explicit base_address, extent, stride}}
+    const bad = @get_dsd(mem1d_dsd, .{});
+}
+
+// -----
+
+// =============================================================================
+// ERROR: fabric DSDs require a fabric endpoint
+// =============================================================================
+
+comptime {
+    // expected-error @+1 {{fabin_dsd requires fabric_color or input_queue}}
+    const bad = @get_dsd(fabin_dsd, .{ .extent = 10 });
+}
+
+// -----
+
+// =============================================================================
+// ERROR: fabric DSDs require extent
+// =============================================================================
+
+comptime {
+    // expected-error @+1 {{fabin_dsd requires extent}}
+    const bad = @get_dsd(fabin_dsd, .{ .fabric_color = @get_color(0) });
+}
+
+// -----
+
+// =============================================================================
+// @set_dsd_stride - Modify stride of a mem1d_dsd
+// =============================================================================
+
+var arr_stride: [10]u16;
+const dsd_for_stride = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{10} -> arr_stride[i]
+});
+const dsd_stride2 = @set_dsd_stride(dsd_for_stride, 2);
+
+comptime {
+    // expected-remark @+1 {{@get_dsd(mem1d_dsd, .{ .base_address = &arr_stride, .offset = 0, .stride = 2, .extent = 10 })}}
+    @comptime_print(dsd_stride2);
+}
+
+// -----
+
+// =============================================================================
+// @set_dsd_length - Modify extent of a mem1d_dsd
+// =============================================================================
+
+var arr_len: [20]u16;
+const dsd_for_len = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{20} -> arr_len[i]
+});
+const dsd_len5 = @set_dsd_length(dsd_for_len, 5);
+
+comptime {
+    // expected-remark @+1 {{@get_dsd(mem1d_dsd, .{ .base_address = &arr_len, .offset = 0, .stride = 1, .extent = 5 })}}
+    @comptime_print(dsd_len5);
+}
+
+// -----
+
+// =============================================================================
+// @set_dsd_length - Modify extent of a fabin_dsd
+// =============================================================================
+
+const fabin_for_len = @get_dsd(fabin_dsd, .{
+    .extent = 10,
+    .fabric_color = @get_color(0)
+});
+const fabin_len5 = @set_dsd_length(fabin_for_len, 5);
+
+comptime {
+    // expected-remark @+1 {{@get_dsd(fabin_dsd, .{ .extent = 5, .fabric_color = @get_color(0) })}}
+    @comptime_print(fabin_len5);
+}
+
+// -----
+
+// =============================================================================
+// @set_dsd_length - Modify extent of a fabout_dsd
+// =============================================================================
+
+const fabout_for_len = @get_dsd(fabout_dsd, .{
+    .extent = 10,
+    .fabric_color = @get_color(1)
+});
+const fabout_len5 = @set_dsd_length(fabout_for_len, 5);
+
+comptime {
+    // expected-remark @+1 {{@get_dsd(fabout_dsd, .{ .extent = 5, .fabric_color = @get_color(1) })}}
+    @comptime_print(fabout_len5);
+}
+
+// -----
+
+// =============================================================================
+// @set_dsd_base_addr - Modify base address of a mem1d_dsd
+// =============================================================================
+
+var arr_base1: [10]u16;
+var arr_base2: [10]u16;
+const dsd_for_base = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{10} -> arr_base1[i]
+});
+const dsd_new_base = @set_dsd_base_addr(dsd_for_base, &arr_base2);
+
+comptime {
+    // expected-remark @+1 {{@get_dsd(mem1d_dsd, .{ .base_address = &arr_base2, .offset = 0, .stride = 1, .extent = 10 })}}
+    @comptime_print(dsd_new_base);
+}
+
+// -----
+
+// =============================================================================
+// @increment_dsd_offset - Increment offset of a mem1d_dsd
+// =============================================================================
+
+var arr_off: [20]u16;
+const dsd_for_off = @get_dsd(mem1d_dsd, .{
+    .tensor_access = |i|{10} -> arr_off[i]
+});
+const dsd_off5 = @increment_dsd_offset(dsd_for_off, 5, u16);
+
+comptime {
+    // expected-remark @+1 {{@get_dsd(mem1d_dsd, .{ .base_address = &arr_off, .offset = 5, .stride = 1, .extent = 10 })}}
+    @comptime_print(dsd_off5);
+}

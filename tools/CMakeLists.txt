@@ -1,0 +1,6 @@
+add_subdirectory(csl-lex-roundtrip)
+add_subdirectory(csl-lsp-server)
+add_subdirectory(csl-opt)
+add_subdirectory(csl-pp)
+add_subdirectory(csl-s2s)
+add_subdirectory(inject-mllvm)

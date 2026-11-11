@@ -1,0 +1,52 @@
+---
+title: Overview
+description: The libraries that come with csl++, how they are imported, and what they have in common.
+sidebar:
+  order: 0
+---
+
+csl++ comes with three libraries, in `csl-libs/` of the repository. They are ports of libraries of the Cerebras SDK benchmarks to csl++: their fabric operations are those of the originals, but they offer async functions instead of callback tasks, and they claim their resources instead of taking them as parameters.
+
+| Library | Operations | Used by |
+| --- | --- | --- |
+| [`allreduce`](allreduce/) | Sum or maximum of a vector over all PEs, with the result on every PE; 2-norm of a scalar over all PEs. | The tutorial, the stencil benchmarks. |
+| [`stencil_3d_7pts`](stencil_3d_7pts/) | Product of a vector with a 7-point stencil matrix on a 3D grid. | The tutorial, the stencil benchmarks. |
+| [`collectives_2d`](collectives_2d/) | Broadcast, scatter, gather and reduce along the rows or columns of the rectangle. | GEMV and GEMM. |
+
+## Importing a library
+
+An installed `csl-pp` finds the libraries without further options: it searches the libraries of its installation, `share/csl-mlir/libs`, after all import paths. A `csl-pp` from the build directory needs the `csl-libs` directory of the repository in its import path:
+
+```bash
+csl-pp layout.csl --import-path=/path/to/csl++/csl-libs ...
+```
+
+Each library has a layout part and a PE part, like the libraries of the SDK. The layout file imports the layout part, which claims the colors of the library, and passes the result of its `get_params(px, py)` to the PE program of each PE. The PE program imports the PE part with it:
+
+```csl
+// layout.csl
+const reduce = @import_module("allreduce/layout.csl", .{ .width = width, .height = height });
+// ...
+@set_tile_code(px, py, "pe.csl", .{ .reduce_params = reduce.get_params(px, py), ... });
+```
+
+```csl
+// pe.csl
+const reduce = @import_module("allreduce/pe.csl", .{ .reduce_params = reduce_params, .dsr_id = 1 });
+```
+
+Each import is an instance with claims of its own, so a library can be imported more than once.
+
+## Calling a library
+
+The operations are async functions, called with `@await` from an async function or async task:
+
+```csl
+@await(reduce.allreduce(n, &x, reduce.TYPE_BINARY_OP.ADD));
+```
+
+A program that uses a library therefore has at least one async task, and calls `@coro_runtime_init()` before it is activated; see [Async functions and tasks](../language/async/). At most one operation of an instance runs at a time.
+
+## DSRs
+
+The libraries load their DSDs into explicit DSRs, as the originals do, and csl++ has no claim builtin for DSRs. The PE program assigns them with the `dsr_id` or `dsr_ids` parameter of each import. Two instances whose operations can run at the same time, for example in one `@await_parallel`, need different DSR sets; instances whose operations never overlap can share one.

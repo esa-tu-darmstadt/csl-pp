@@ -1,0 +1,24 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+find_dependency(MLIR CONFIG)
+# Squashfs is private to CSLSifReader. Static archives expose it as a
+# link-only dependency; shared libraries already contain its implementation.
+if(NOT "@BUILD_SHARED_LIBS@")
+  find_dependency(Squashfs CONFIG)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyLLVM.cmake")
+set(CSLMLIR_LLVM_REVISION "@CSL_LLVM_REVISION@")
+csl_verify_llvm_revision("${CSLMLIR_LLVM_REVISION}")
+include("${CMAKE_CURRENT_LIST_DIR}/CSLMLIRTargets.cmake")
+
+# Resolve dependency includes at consumption time, so moving the SDK does not
+# retain the producer's source, build or Conan-cache paths.
+set(CSLMLIR_LIBRARY_TARGETS "@CSLMLIR_LIBRARY_TARGETS@")
+foreach(library IN LISTS CSLMLIR_LIBRARY_TARGETS)
+  set_property(TARGET CSLMLIR::${library} APPEND PROPERTY
+    INTERFACE_INCLUDE_DIRECTORIES "${LLVM_INCLUDE_DIRS};${MLIR_INCLUDE_DIRS}")
+endforeach()
+# Directory with cslc and cs_python wrappers that run the Cerebras SDK from an
+# OCI image named by CEREBRAS_SDK_IMAGE (see the README next to it).
+set_and_check(CSLMLIR_SDK_OCI_BIN_DIR "@PACKAGE_CMAKE_INSTALL_DATADIR@/csl-mlir/cerebras-sdk-oci/bin")
+check_required_components(CSLMLIR)

@@ -1,0 +1,86 @@
+{
+	"name": "CSL",
+	"patterns": [
+		{
+			"begin": "//",
+			"end": "$",
+			"name": "comment.line.double-slash.csl"
+		},
+		{
+			"match": "\\b(align|and|asm|break|comptime|color|const|continue|else|export|extern|fn|for|if|layout|linkname|linksection|or|param|return|struct|task|var|while|inline|volatile|noinline|async|await|suspend)\\b",
+			"name": "keyword.control.csl"
+		},
+		{
+			"match": "(@[A-Za-z_][A-Za-z0-9_]*)\\b",
+			"name": "variable.language.csl"
+		},
+		{
+			"match": "\\b([fiu](8|16|32|64))\\b",
+			"name": "variable.storage.type.csl"
+		},
+		{
+			"match": "\\b(bf16|cb16)\\b",
+			"name": "variable.storage.type.csl"
+		},
+		{
+			"match": "\\b(data_task_id|control_task_id|local_task_id)\\b",
+			"name": "variable.storage.type.csl"
+		},
+		{
+			"match": "\\b(bool)\\b",
+			"name": "variable.storage.type.csl"
+		},
+		{
+			"match": "\\bcomptime_(int|float|string|struct)\\b",
+			"name": "variable.storage.type.csl"
+		},
+		{
+			"match": "\\b(false|true|EAST|WEST|NORTH|SOUTH|RAMP)\\b",
+			"name": "constant.language.csl"
+		},
+		{
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.csl",
+					"match": "\\\\."
+				}
+			],
+			"name": "string.quoted.double.csl"
+		},
+		{
+			"begin": "'",
+			"end": "'",
+			"patterns": [
+				{
+					"name": "constant.character.escape.csl",
+					"match": "\\\\."
+				}
+			],
+			"name": "string.quoted.single.csl"
+		},
+		{
+			"match": "\\b([0-9]+(\\.[0-9])?+([eE][+-]?[0-9]+))\\b",
+			"name": "constant.numeric.csl"
+		},
+		{
+			"match": "\\b(0x[0-9a-fA-F]+)\\b",
+			"name": "constant.numeric.csl"
+		},
+		{
+			"match": "\\b(0o[0-7]+)\\b",
+			"name": "constant.numeric.csl"
+		},
+		{
+			"match": "\\b(0b[01]+)\\b",
+			"name": "constant.numeric.csl"
+		},
+		{
+			"match": "\\b([0-9]+)\\b",
+			"name": "constant.numeric.csl"
+		}
+	],
+	"repository": {},
+	"scopeName": "source.csl"
+}

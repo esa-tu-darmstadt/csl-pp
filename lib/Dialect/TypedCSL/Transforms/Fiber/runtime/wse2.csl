@@ -1,0 +1,380 @@
+// Fiber cooperative multitasking runtime — WSE2.
+//
+// This file is imported automatically by the transpiler into every PE program
+// that uses async tasks. It provides the low-level primitives for fiber-based
+// stack switching.
+//
+// All functions assume WSE2 instruction set. On WSE2, the stack pointer is
+// the general-purpose register r7, which can be set directly (unlike WSE3's
+// dedicated sp register that requires addsp with a limited immediate).
+
+param debug = false; // Set to true to enable debug prints (imports the simprint module).
+const print = if (debug) @import_module("<simprint>") else void;
+
+// ---------------------------------------------------------------------------
+// Worker pool — owned by the runtime, accessed by the pass via symbol lookup.
+//
+// Stored as struct-of-arrays so that `&pool_<field>[i]` collapses to a single
+// shift-and-add: each array element is exactly 2 bytes, so the address is
+// `base + i*2`. The previous AoS layout had a 10-byte stride per slot, which
+// required `i*8 + i*2 = i*10` plus an offset-within-slot computation on every
+// access — ~6 instructions per slot lookup, repeated on both suspend and
+// resume sides.
+// ---------------------------------------------------------------------------
+// Pool is indexed by raw task ID (0..28 on WSE-2). Comptime task allocations
+// claim from the high end of the range, so the pool must be large enough to
+// hold any reachable ID — not just `numDynamicWorkers`.
+const pool_size: u16 = 29;
+
+// Hardware-native saved state. SDK 2.10 pointers are byte-addressed, while
+// WSE-2 r7 and indirect jump targets use u16-word addresses. Keeping the
+// normalized values as u16 avoids conversions in the context-switch hot path.
+var pool_sp:               [pool_size]u16;
+var pool_pc:               [pool_size]u16;
+var pool_caller_wid:       [pool_size]u16;
+// Pointer to the join_counter for the await_parallel this worker
+// participates in. The counter itself lives on the caller's stack frame
+// (one per await_parallel call site), so nested await_parallels on the
+// same task don't share storage.
+var pool_join_counter_ptr: [pool_size](*u16);
+var pool_stack_bottom:     [pool_size]u16; // lowest word address of slot's stack region
+
+// ---------------------------------------------------------------------------
+// get_current_task_id — read the currently executing task ID from hardware.
+//
+// Reads TAMAP_CE_TASK_ID register (0x7E19), extracts task_id from bits [10:5].
+// ---------------------------------------------------------------------------
+export fn get_current_task_id() u16 {
+    const value = @as(u16, @get_config_unchecked(@as(u16, 0x7E19))) & 0b11111;
+    if(debug) {
+        print.print_string("fiber: get_current_task_id: value=0x");
+        print.print_u16_hex(@as(u16, @get_config_unchecked(@as(u16, 0x7E19))));
+        print.print_string(" task_id=");
+        print.print_u16_decimal(value);
+        print.print_string("\n");
+    }
+    return value;
+}
+
+// ---------------------------------------------------------------------------
+// set_sp_and_jmp — set hardware SP (r7) to `target`, then jump to `pc`.
+//
+// On WSE2, r7 is a general-purpose register used as the stack pointer.
+// Unlike WSE3's dedicated sp register (modifiable only via addsp with a
+// limited immediate), r7 can be set to any value with a single mov16.
+// This makes the implementation much simpler — no loop, no self-modifying
+// code, no bitwise decomposition.
+//
+// Never returns — jumps to `pc` after setting SP and restoring registers.
+//
+// After setting SP, loads r2-r5 (argument registers) and r15 (link register)
+// from the new stack via indirect addressing through r6. For fresh start,
+// these contain pre-written function args and the completion handler address
+// (in r15). The callee returns via jmp r15, which tail-calls into the
+// completion handler. For resume after suspend, these are stale values that
+// get immediately overwritten by suspend's epilogue.
+//
+// Used by worker entry tasks to switch to a fiber's stack and jump to the
+// resume point (or function entry on fresh start).
+// ---------------------------------------------------------------------------
+var debug_sp: u16; // Used only for debug prints to allow printing the current SP without accessing the stack
+inline fn print_sp() void {
+    asm volatile ("mov16 [%[addr]] = r7 \n mov16 r3 = %[addr] \n movri r2 = 302 \n nop \n nop \n simprt" :  :  [addr] "{r6}" (&debug_sp) : "r2", "r3");
+}
+
+// SDK 2.10 pointers are byte-addressed, but WSE-2 indirect memory operands
+// consume word addresses. Keep the type-punning mov separate from the CSL
+// arithmetic because the WSE-2 inline assembler rejects immediate shifts.
+inline fn ptr_to_word_addr(ptr: *u16) u16 {
+    var raw: u16;
+    asm ("mov16 %[out] = %[inp]" : [out] "=r" (raw) : [inp] "r" (ptr));
+    return raw / 2;
+}
+
+export fn set_sp_and_jmp(target: u16, pc: u16) void {
+
+    if(debug) {
+        var current: u16;
+        asm volatile ("mov16 %[out] = r7" : [out] "=r" (current));
+
+        print.print_string("fiber: set_sp_and_jmp: target=");
+        print.print_u16_decimal(target);
+        print.print_string(" current=");
+        print.print_u16_decimal(current);
+        print.print_string(" pc=");
+        print.print_u16_hex(pc);
+        print.print_string("\n");
+    }
+
+    // Single asm block: set SP, load args from new stack, jump.
+    // No global needed — the compiler places both `target` and `pc` in
+    // registers outside the clobber set (r0-r1, r8-r14) before the asm.
+    // On WSE2, r6 is the dedicated indirect addressing register.
+    asm volatile (@strcat(
+        "mov16 r7 = %[target] \n",       // Set SP directly
+        "mov16 r6 = r7 \n",              // r6 = base for indirect loads
+        "mov16 r2 = [r6] \n",            // r2 = sp[0]
+        "add16 r6 = r6, 1 \n",
+        "mov16 r3 = [r6] \n",            // r3 = sp[1]
+        "add16 r6 = r6, 1 \n",
+        "mov16 r4 = [r6] \n",            // r4 = sp[2]
+        "add16 r6 = r6, 1 \n",
+        "mov16 r5 = [r6] \n",            // r5 = sp[3]
+        "add16 r6 = r6, 1 \n",
+        "mov16 r15 = [r6] \n",           // r15 = sp[4] (link register)
+        "jmp %[pc]"
+    )
+        : : [target] "r" (target), [pc] "r" (pc)
+        : "r2", "r3", "r4", "r5", "r6", "r15"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// suspend — save SP and resume label to pool, then terminate.
+//
+// Registers live across the suspend point are preserved by the compiler
+// spilling them, driven by the clobber list on the asm below — there is no
+// manual register save area, only SP and the resume PC are saved by hand.
+// If suspend is emitted as a real call the two halves are covered separately:
+// caller-saved registers are spilled by the caller around the call,
+// callee-saved ones here because the asm clobbers them. If it is inlined, the
+// clobber list alone drives the spilling. Either way, registers the clobber
+// list cannot name — cflag1, DSD registers — are NOT preserved, so nothing
+// may hold live state in them across a suspend.
+//
+// Note the transpiler only strips the `export` modifier when it emits this
+// runtime; it does not mark the function noinline. cslc is therefore free to
+// inline it into its callers, and in current builds it does.
+//
+// On resume, the worker entry calls set_sp_and_jmp(saved_sp, saved_pc), which
+// jumps to the resume label (1:) below. Execution continues from there, the
+// spilled registers are reloaded, and control reaches suspend's caller as if
+// the call had simply returned.
+// ---------------------------------------------------------------------------
+export fn suspend(sp_ptr: *u16, pc_ptr: *u16) void {
+
+    // SDK 2.10 resolves a numeric inline-assembly label to its byte address,
+    // while WSE2's register-indirect jump consumes a u16 word address. Convert
+    // the label value once before saving it. The typed store through pc_ptr is
+    // byte-addressed and performs the pointer addressing conversion itself.
+    var pc_byte_addr: u16;
+    asm volatile ("movr6i %[pc_out] = 1f" : [pc_out] "={r6}" (pc_byte_addr));
+    const pc_word_addr = pc_byte_addr / 2;
+    pc_ptr.* = pc_word_addr;
+
+    if(debug) {
+        var pc_val: u16;
+        var sp_val: u16;
+        asm volatile ("mov16 %[sp_out] = r7" : [sp_out] "=r" (sp_val));
+        pc_val = pc_word_addr;
+
+        print.print_string("fiber: suspend:");
+        print.print_string(" pc=");
+        print.print_u16_hex(pc_val);
+        print.print_string(" sp (potentially before spilling) =");
+        print.print_u16_decimal(sp_val);
+        print.print_string("\n");
+    }
+
+    // Spill all registers, save the new SP to pool slot and suspend. This is all one
+    // asm to ensure the compiler doesnt change the SP between what we save and what
+    // it expects when we resume.
+    // The compiler automatically determines which registers need to be spilled. If this function
+    // is not inlined, the compiler will only spill callee-saved registers (since the
+    // caller-saved have already been spilled by the caller)
+    // On resume: worker entry does set_sp_and_jmp and lands at label 1: below
+    // Since memory may change between suspend and resume, we clobber memory.
+    // On WSE2, r7 is the SP — store it via indirect through r6. r7 is excluded
+    // from the clobber list since the compiler manages it as the stack pointer.
+    const sp_slot_addr = ptr_to_word_addr(sp_ptr);
+    asm volatile ("mov16 [%[sp_addr]] = r7 \n nop.term \n 1:"
+        :
+        : [sp_addr] "{r6}" (sp_slot_addr)
+        :  "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "cflag", "memory");
+
+    if(debug) {
+        print.print_string("fiber: resuming from suspend\n");
+    }
+
+    // Will return here on resume. The compiler will automatically restore
+    // the registers that were spilled (including the link register r15)
+    return;
+}
+
+// ---------------------------------------------------------------------------
+// caller_join — caller-side join after running its first @await_parallel
+// callee synchronously.
+//
+// Decrements the caller's own join counter; if any workers are still
+// outstanding (new_count != 0) suspends until the last worker's
+// completion_handler activates us. If workers all finished while the
+// caller was running its sync g_1, this is a no-op fall-through.
+//
+// Race-free w.r.t. workers because we run on a single PE and tasks switch
+// only at suspend points: nothing can preempt between the decrement and the
+// suspend below.
+// ---------------------------------------------------------------------------
+export fn caller_join(sp_ptr: *u16, pc_ptr: *u16, join_ptr: *u16) void {
+    const new_count = join_ptr.* - @as(u16, 1);
+    join_ptr.* = new_count;
+
+    if(debug) {
+        print.print_string("fiber: caller_join: my_id=");
+        print.print_u16_decimal(@get_int(@current_task()));
+        print.print_string(" new_count=");
+        print.print_u16_decimal(new_count);
+        print.print_string("\n");
+    }
+
+    if (new_count != @as(u16, 0)) {
+        suspend(sp_ptr, pc_ptr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// completion_handler — entered via jmp r15 when a child fiber returns.
+//
+// Reads the current task ID from hardware to find the slot, then decrements
+// the parent's join counter and activates the parent if all children are done.
+// ---------------------------------------------------------------------------
+export fn completion_handler() void {
+    const my_task = @current_task();
+    const my_id = @get_int(my_task);
+    const caller_wid = pool_caller_wid[my_id];
+    const join_ptr = pool_join_counter_ptr[my_id];
+
+    // Release this worker's dynamically claimed task ID.
+    @release_local_task(my_task);
+
+    const new_count = join_ptr.* - @as(u16, 1);
+    join_ptr.* = new_count;
+
+    if(debug) {
+        print.print_string("fiber: completion_handler: my_id=");
+        print.print_u16_decimal(my_id);
+        print.print_string(" caller_wid=");
+        print.print_u16_decimal(caller_wid);
+        print.print_string(" new_count=");
+        print.print_u16_decimal(new_count);
+        print.print_string("\n");
+    }
+
+    if (new_count == @as(u16, 0)) {
+        @activate(@get_local_task_id(caller_wid));
+    }
+
+    asm volatile ("nop.term");
+}
+
+// ---------------------------------------------------------------------------
+// root_done — entered via jmp r15 when a root task returns.
+// Just terminates the task. Root tasks handle their own cleanup
+// (e.g. unblock_cmd_stream) before returning.
+// ---------------------------------------------------------------------------
+export fn root_done() void {
+    if(debug) {
+        print.print_string("fiber: root_done\n");
+    }
+    asm volatile ("nop.term");
+}
+
+// ---------------------------------------------------------------------------
+// bind_local_task — runtime task table patching.
+//
+// Patches the task table trampoline for the given task ID to jump to fn_addr.
+// This is the runtime equivalent of the comptime @bind_local_task builtin.
+// ---------------------------------------------------------------------------
+export fn bind_task(fn_ptr: *u16, task_id: u16) void {
+    var fn_ptr_raw: u16;
+    asm volatile ("mov16 %[out] = %[inp]" : [out] "=r" (fn_ptr_raw) : [inp] "r" (fn_ptr));
+
+    // 0x7E1E hold the address of the task table trampoline entry point
+    const base_addr: u16 = @get_config_unchecked(0x7E1E); 
+    const words_per_task = 4;
+
+    // Address of the first instruction of the trampoline for this task ID
+    const task_table_entry_base = base_addr + task_id * words_per_task;
+
+    if(debug) {
+        print.print_string("fiber: bind_task: task_id=");
+        print.print_u16_decimal(task_id);
+        print.print_string(" fn_ptr=0x");
+        print.print_u16_hex(fn_ptr_raw);
+
+        print.print_string(" base_addr=0x");
+        print.print_u16_hex(base_addr);
+        print.print_string(" task_table_entry_base=0x");
+        print.print_u16_hex(task_table_entry_base);
+        print.print_string(" using long jump\n");
+    }
+
+
+    // Patch words 1-3 with a jmp + nop.term encoding the target address.
+    // The 2-byte jmp reads its target from the following nop.term instruction.
+    // The encoded value is (word_addr + 2) << 2 — a 16-bit quantity.
+    // Bit 15 of the encoded value goes into the jmp instruction (bit 12),
+    // and only the lower 15 bits go into the nop.term upper half.
+    //   jmp opcode: 0x0340 (bit 15 = 0) or 0x1340 (bit 15 = 1)
+    // Valid for word addresses up to 0x3FFD (~32KB code space).
+    // SDK 2.10 function pointers are byte-addressed; the WSE-2 long-jump
+    // encoding continues to consume a u16-word address.
+    const word_addr: u16 = fn_ptr_raw / 2;
+    const encoded: u16 = (word_addr + 2) << 2;
+    const jmp_opcode: u16 = 0x0340 | ((encoded >> 15) << 12);
+    const nop_term_upper: u16 = encoded & 0x7FFF;
+    @set_config_unchecked(task_table_entry_base+1, jmp_opcode);            // jmp (reads target from nop.term)
+    @set_config_unchecked(task_table_entry_base+2, 0x068F);                // nop.term lower half
+    @set_config_unchecked(task_table_entry_base+3, nop_term_upper);        // nop.term upper half (encoded target)
+
+
+    @set_config_unchecked(0x7E32, 1); // Flush icache.
+
+    // Wait out the icache flush -- see the WSE-3 runtime for the failure this
+    // prevents (a dropped store in the caller right after this call). Measured
+    // on WSE-3 silicon; applied here too because the sequence is identical, but
+    // not verified on WSE-2 hardware.
+    asm volatile ("nop \n nop \n nop \n nop \n nop \n nop \n nop \n nop" ::: "memory");
+
+     // Unbound tasks are initially blocked on WSE2 (in contrast to WSE3)
+    @unblock(@get_local_task_id(task_id));
+}
+
+// ---------------------------------------------------------------------------
+// worker_entry — single worker task bound to all fiber slots.
+//
+// Reads the current task ID from hardware to determine which pool slot
+// to resume, loads SP and PC from the pool, and jumps to the fiber.
+// ---------------------------------------------------------------------------
+export fn worker_entry() void {
+    const my_id = @get_int(@current_task());
+
+    if(debug) {
+        print.print_string("fiber: worker_entry: id=");
+        print.print_u16_decimal(my_id);
+        print.print_string("\n");
+    }
+
+    set_sp_and_jmp(pool_sp[my_id], pool_pc[my_id]);
+}
+
+// ---------------------------------------------------------------------------
+// Initialization and entry point binding.
+// Must be called by the main PE program to set up the runtime and bind the root task.
+// The transpiler replaces this with the actual implementation during fiber lowering.
+// ---------------------------------------------------------------------------
+export fn init() void {
+    // Will be replaced by the pass with code to initialize the runtime state
+    // and bind the root task.
+    //
+    // The self-assigns below keep each pool_<field> global alive through
+    // module inlining: with the SoA layout, `pool_stack_bottom` (and any
+    // future field used only by pass-emitted init code) has no other
+    // reference in the runtime, so without this it would be DCE'd before
+    // the pass runs and `lookupSymbol` would fail. The body is discarded
+    // when the pass rewrites init().
+    pool_sp[0]           = pool_sp[0];
+    pool_pc[0]           = pool_pc[0];
+    pool_caller_wid[0]   = pool_caller_wid[0];
+    pool_join_counter_ptr[0] = pool_join_counter_ptr[0];
+    pool_stack_bottom[0] = pool_stack_bottom[0];
+}

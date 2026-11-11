@@ -1,0 +1,143 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic address-of and dereference
+// =============================================================================
+
+export fn basic_ptr() i32 {
+  var x: i32 = 42;
+  var ptr = &x;
+  return ptr.*;
+}
+
+// -----
+
+// =============================================================================
+// Const pointer from const variable
+// =============================================================================
+
+export fn const_ptr() i32 {
+  const y: i32 = 100;
+  const ptr = &y;
+  return ptr.*;
+}
+
+// -----
+
+// =============================================================================
+// Write through mutable pointer
+// =============================================================================
+
+export fn write_through_ptr() i32 {
+  var x: i32 = 10;
+  var ptr = &x;
+  ptr.* = 20;
+  return x;
+}
+
+// -----
+
+// =============================================================================
+// Multiple dereferences in expression
+// =============================================================================
+
+export fn ptr_arithmetic() i32 {
+  var a: i32 = 5;
+  var b: i32 = 7;
+  var ptr_a = &a;
+  var ptr_b = &b;
+  return ptr_a.* + ptr_b.*;
+}
+
+// -----
+
+// =============================================================================
+// Pointer to local variable used across statements
+// =============================================================================
+
+export fn ptr_across_statements() i32 {
+  var x: i32 = 1;
+  var ptr = &x;
+  x = 2;
+  var y: i32 = ptr.*;
+  ptr.* = 3;
+  return x + y;
+}
+
+// -----
+
+// =============================================================================
+// Error: Cannot take address of a literal (temporary)
+// =============================================================================
+
+export fn address_of_literal() *i32 {
+  // expected-error @+1 {{operand must be an lvalue or function type, got: comptime_int}}
+  return &42;
+}
+
+// -----
+
+// =============================================================================
+// Error: Cannot take address of an expression result (temporary)
+// =============================================================================
+
+export fn address_of_expr() *i32 {
+  var x: i32 = 10;
+  // expected-error @+1 {{operand must be an lvalue or function type, got: i32}}
+  return &(x + 1);
+}
+
+// -----
+
+// =============================================================================
+// Error: Cannot dereference a non-pointer type
+// =============================================================================
+
+export fn deref_non_pointer() i32 {
+  var x: i32 = 42;
+  // expected-error @+1 {{dereference operand must be a pointer type, got: i32}}
+  return x.*;
+}
+
+// -----
+
+// =============================================================================
+// Error: Cannot assign through const pointer
+// =============================================================================
+
+export fn assign_through_const_ptr() void {
+  const x: i32 = 10;
+  const ptr = &x;
+  // expected-error @+1 {{cannot assign to const lvalue}}
+  ptr.* = 20;
+}
+
+// -----
+
+// =============================================================================
+// Coerce function reference to const pointer
+// =============================================================================
+
+fn get_value() i32 {
+  return 55;
+}
+
+export fn func_ptr_coerce() *const fn() i32 {
+  const func_ptr: *const fn() i32 = get_value;
+  return func_ptr.*;
+}
+
+// -----
+
+// =============================================================================
+// Ptrcast: const binding does not make pointee const.
+// `const ptr` means ptr can't be reassigned, NOT that pointee is const.
+// Writing through [*]u16 (mutable many-pointer) must be allowed.
+// =============================================================================
+
+var ptrcast_arr = @zeros([4]u32);
+
+export fn ptrcast_const_binding_mutable_pointee() void {
+  const ptr = @ptrcast([*]u16, &ptrcast_arr);
+  ptr[0] = @as(u16, 42);
+}

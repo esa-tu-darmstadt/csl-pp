@@ -1,0 +1,66 @@
+---
+title: allreduce
+description: Sum or maximum of a vector over all PEs of the rectangle, with the result on every PE.
+sidebar:
+  order: 1
+---
+
+`csl-libs/allreduce` reduces a vector over all PEs of the rectangle and leaves the result on every PE. It is the csl++ port of the `allreduce` library of the SDK benchmarks.
+
+## Layout part
+
+```csl
+const reduce = @import_module("allreduce/layout.csl", .{
+  .width = width,    // i16, width of the rectangle
+  .height = height,  // i16, height of the rectangle
+});
+```
+
+`reduce.get_params(px, py)` returns the parameters of the PE part for the PE at `(px, py)`. The module claims one color.
+
+## PE part
+
+```csl
+const reduce = @import_module("allreduce/pe.csl", .{
+  .reduce_params = reduce_params,  // from get_params
+  .dsr_id = 1,                     // u16, default 1
+});
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `reduce_params` | The struct from `get_params` of the layout part. |
+| `dsr_id` | Index of the DSRs `dest`, `src0` and `src1` that the operations use. |
+
+The module claims one input queue and one output queue.
+
+### `allreduce`
+
+```csl
+async fn allreduce(n: i16, x: [*]f32, op: TYPE_BINARY_OP) void
+```
+
+Reduces `x[0..n)` over all PEs with `op`, which is `TYPE_BINARY_OP.ADD` or `TYPE_BINARY_OP.MAX`, and leaves the result in `x` on every PE. `n` must be positive.
+
+### `allreduce_nrm2`
+
+```csl
+async fn allreduce_nrm2(val: f32) f32
+```
+
+Returns the 2-norm of the vector that has the entry `val` on each PE. The squares are scaled by a power of two near the largest `|val|` so that the sum cannot overflow.
+
+### `tscRefBuffer`
+
+The timestamp taken when the last operation completed, as an array of `u16`. The broadcast phase ends on all PEs within a few cycles, so the benchmarks use it as a reference clock that is nearly synchronous across PEs.
+
+## Requirements
+
+- The rectangle is at least 2 PEs wide and 2 PEs high.
+- At most one operation of an instance runs at a time.
+
+## Mechanism
+
+A reduction has three phases on the one color: a reduction along each row to its last PE, a reduction of those results along the last column to the bottom-right PE, and a broadcast of the result from there to all PEs. The routes of the color are rewritten before each phase, and each phase ends with a teardown wavelet that resets the color on every PE and calls the teardown handler, which completes the phase on that PE.
+
+In a row reduction, every PE sends its vector east, and the last PE accumulates what it receives. The order is set by switches: the first PE sends its vector and then a control wavelet that advances the switch of its east neighbor, whose own send was waiting for that, and so on. The header of `csl-libs/allreduce/pe.csl` describes the mechanism in detail.

@@ -1,0 +1,79 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Positive infinity f32 via @bitcast
+// =============================================================================
+
+// CHECK: fn pos_inf() f32 {
+// CHECK:     return @bitcast(f32, @as(u32, 0x7F800000));
+// CHECK: }
+fn pos_inf() f32 {
+    return @bitcast(f32, @as(u32, 0x7f800000));
+}
+
+// CHECK: export fn use_pos_inf() f32 {
+// CHECK:     return pos_inf();
+// CHECK: }
+export fn use_pos_inf() f32 {
+    return pos_inf();
+}
+
+// -----
+
+// =============================================================================
+// Negative infinity f32 via @bitcast
+// =============================================================================
+
+// CHECK: fn neg_inf() f32 {
+// CHECK:     return @bitcast(f32, @as(u32, 0xFF800000));
+// CHECK: }
+fn neg_inf() f32 {
+    return @bitcast(f32, @as(u32, 0xff800000));
+}
+
+// CHECK: export fn use_neg_inf() f32 {
+// CHECK:     return neg_inf();
+// CHECK: }
+export fn use_neg_inf() f32 {
+    return neg_inf();
+}
+
+// -----
+
+// =============================================================================
+// NaN f32 via @bitcast (quiet NaN)
+// =============================================================================
+
+// CHECK: fn nan_val() f32 {
+// CHECK:     return @bitcast(f32, @as(u32, 0x7FC00000));
+// CHECK: }
+fn nan_val() f32 {
+    return @bitcast(f32, @as(u32, 0x7fc00000));
+}
+
+// CHECK: export fn use_nan() f32 {
+// CHECK:     return nan_val();
+// CHECK: }
+export fn use_nan() f32 {
+    return nan_val();
+}
+
+// -----
+
+// =============================================================================
+// Positive infinity f16 via @bitcast
+// =============================================================================
+
+// CHECK: fn pos_inf_f16() f16 {
+// CHECK:     return @bitcast(f16, @as(u16, 0x7C00));
+// CHECK: }
+fn pos_inf_f16() f16 {
+    return @bitcast(f16, @as(u16, 0x7c00));
+}
+
+// CHECK: export fn use_pos_inf_f16() f16 {
+// CHECK:     return pos_inf_f16();
+// CHECK: }
+export fn use_pos_inf_f16() f16 {
+    return pos_inf_f16();
+}

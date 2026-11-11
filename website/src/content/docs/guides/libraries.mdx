@@ -1,0 +1,25 @@
+---
+title: Writing a library
+description: Rules for libraries that use claims and async functions.
+sidebar:
+  order: 2
+---
+
+This page lists rules for libraries that are imported by several programs, several times, or together with other libraries. The [libraries](../../libraries/) of csl++ follow them; [step 3 of the tutorial](../../tutorial/3-resources/) shows what they claim.
+
+## Structure
+
+Like the libraries of the SDK, a library that uses the fabric has two parts:
+
+- A layout part, imported by the layout file. It claims colors with `@claim_color()`, routes them, and returns the parameters of the PE part for each PE, for example from a function `get_params(x, y)`.
+- A PE part, imported by the PE program with these parameters. It claims queues and task IDs with `@claim_input_queue()`, `@claim_output_queue()` and `@claim_local_task()`, and declares the async functions that programs call.
+
+Colors are claimed in the layout part, because they are routed in the layout file. A color claimed in the layout file or a module it imports is reserved for all PE programs.
+
+## Rules
+
+- Claim every resource. Use no fixed color, queue or task ID. Each import of the library is a separate instance and makes its own claims, so a program can import the library several times.
+- Offer async functions. An `async fn` that starts an operation, suspends and returns when the operation has completed can be awaited by the program and combined with other library calls in `@await_parallel`. Callers do not pass task IDs.
+- One instance per concurrent use. Calls that run at the same time, for example in one `@await_parallel`, must not share queues. Import the library once for each call that can run at the same time as another.
+- Leave initialization to the program. If the library binds an async task, the program must call `@coro_runtime_init()`; say so in the documentation of the library.
+- Declare stack sizes of extern functions. An `extern fn` that an async function of the library calls needs `stack_size(N)`; see [Stacks](../../language/stacks/#stack_sizen).

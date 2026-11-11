@@ -1,0 +1,126 @@
+---
+// How an asynchronous operation continues a computation on the WSE: the task
+// that started it ends, the microthread completes the operation and
+// activates a task, and the scheduler starts that task at its entry point.
+---
+
+<figure class="timeline" aria-label="Three lanes over time: task, microthread, scheduler. The task starts at its entry, launches an asynchronous operation and exits. The microthread runs the operation and, when complete, activates a task. The scheduler dispatches that task, which starts again at its entry point.">
+  <svg viewBox="0 0 760 210" role="img">
+    <defs>
+      <marker id="tarrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead" />
+      </marker>
+    </defs>
+
+    <text x="740" y="18" class="axis" text-anchor="end">time →</text>
+
+    <text x="110" y="56" class="lane">hardware task</text>
+    <text x="110" y="111" class="lane">microthread</text>
+    <text x="110" y="166" class="lane">scheduler</text>
+
+    <path class="rail" d="M 130 52 H 740" />
+    <path class="rail" d="M 130 107 H 740" />
+    <path class="rail" d="M 130 162 H 740" />
+
+    <!-- Task runs from entry to exit, then again from entry -->
+    <path class="run" d="M 170 52 H 330" />
+    <path class="run" d="M 600 52 H 740" />
+
+    <!-- Microthread runs the operation -->
+    <path class="run op" d="M 250 107 H 500" />
+
+    <!-- Launch, complete, activate, dispatch -->
+    <path class="flow" d="M 250 56 V 103" />
+    <path class="flow" d="M 500 111 V 158" />
+    <path class="flow" d="M 600 158 V 56" />
+
+    <g class="event">
+      <circle cx="170" cy="52" r="11" /><text x="170" y="56">1</text>
+      <text x="170" y="34" class="label">entry</text>
+    </g>
+    <g class="event">
+      <circle cx="250" cy="52" r="11" /><text x="250" y="56">2</text>
+      <text x="250" y="34" class="label">launch</text>
+    </g>
+    <g class="event">
+      <circle cx="330" cy="52" r="11" /><text x="330" y="56">3</text>
+      <text x="330" y="34" class="label">exit</text>
+    </g>
+    <g class="event">
+      <circle cx="500" cy="107" r="11" /><text x="500" y="111">4</text>
+      <text x="500" y="134" class="label">complete</text>
+    </g>
+    <g class="event">
+      <circle cx="500" cy="162" r="11" /><text x="500" y="166">5</text>
+      <text x="500" y="190" class="label">activate</text>
+    </g>
+    <g class="event">
+      <circle cx="600" cy="162" r="11" /><text x="600" y="166">6</text>
+      <text x="600" y="190" class="label">dispatch</text>
+    </g>
+    <g class="event">
+      <circle cx="600" cy="52" r="11" /><text x="600" y="56">7</text>
+      <text x="600" y="34" class="label">entry again</text>
+    </g>
+  </svg>
+</figure>
+
+<style>
+  .timeline {
+    margin-block: 1.5rem 2rem;
+    max-width: 46rem;
+    margin-inline: auto;
+  }
+  .timeline svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    font-family: var(--sl-font-system);
+  }
+  .axis, .lane {
+    font-size: 13px;
+    fill: var(--sl-color-gray-2);
+  }
+  .lane {
+    text-anchor: end;
+    font-weight: 600;
+  }
+  .rail {
+    stroke: var(--sl-color-gray-5);
+    stroke-width: 2;
+  }
+  .run {
+    stroke: var(--cpp-orange);
+    stroke-width: 6;
+    stroke-linecap: round;
+  }
+  .run.op {
+    stroke: var(--cpp-teal);
+  }
+  .flow {
+    fill: none;
+    stroke: var(--sl-color-gray-3);
+    stroke-width: 2;
+    stroke-dasharray: 4 3;
+    marker-end: url(#tarrow);
+  }
+  .arrowhead {
+    fill: var(--sl-color-gray-3);
+  }
+  .event circle {
+    fill: var(--sl-color-bg);
+    stroke: var(--sl-color-white);
+    stroke-width: 1.5;
+  }
+  .event text {
+    text-anchor: middle;
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--sl-color-white);
+  }
+  .event .label {
+    font-weight: 400;
+    font-size: 12px;
+    fill: var(--sl-color-gray-2);
+  }
+</style>

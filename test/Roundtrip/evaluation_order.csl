@@ -1,0 +1,69 @@
+// RUN: csl-s2s %s --count-tasks=false | FileCheck %s
+//
+// Operands are evaluated left to right: a variable is read where it appears
+// in the source, before the side effects of later operands. Two reads of
+// the same variable around a call are not merged, and the emitter only
+// introduces a temporary where emitting in place would reorder them.
+
+var x: i32 = 0;
+fn h() i32 { x += 1; return 0; }
+fn g() void { x += 1; }
+fn set(p: *i32) i32 { p.* = 5; return 0; }
+
+// A void call becomes a statement, so the first read moves into a
+// temporary before it.
+// CHECK-LABEL: export fn void_call() i32 {
+// CHECK-NEXT:    const [[X:__csl_tmp[0-9]+]] = x;
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    const t: {{.*}} = .{ [[X]], x };
+export fn void_call() i32 {
+  const t = .{ x, g(), x };
+  return t[0] + t[2];
+}
+
+// CHECK-LABEL: export fn value_call() i32 {
+// CHECK-NEXT:    const t: {{.*}} = .{ x, h(), x };
+export fn value_call() i32 {
+  const t = .{ x, h(), x };
+  return t[0] + t[2];
+}
+
+// CHECK-LABEL: export fn binary() i32 {
+// CHECK-NEXT:    return x + h() + x;
+export fn binary() i32 {
+  return x + h() + x;
+}
+
+// CHECK-LABEL: export fn through_pointer() i32 {
+// CHECK-NEXT:    var y: i32 = @as(i32, 1);
+// CHECK-NEXT:    const t: {{.*}} = .{ y, set(&y), y };
+export fn through_pointer() i32 {
+  var y: i32 = 1;
+  const t = .{ y, set(&y), y };
+  return t[0] + t[2];
+}
+
+// CHECK-LABEL: export fn reread() i32 {
+// CHECK-NEXT:    const a: i32 = x;
+// CHECK-NEXT:    g();
+// CHECK-NEXT:    return a + x;
+export fn reread() i32 {
+  const a = x;
+  g();
+  return a + x;
+}
+
+// Each compound assignment reads y after the previous one wrote it. Nothing
+// writes y between the reads of one statement, so each is emitted in place.
+// CHECK-LABEL: export fn updates(param0: f32) f32 {
+// CHECK-NEXT:    var y: f32 = param0;
+// CHECK-NEXT:    const z: f32 = @as(f32, -0.5) * param0;
+// CHECK-NEXT:    y += y * (@as(f32, 0.5) + z * y * y);
+// CHECK-NEXT:    y += y * (@as(f32, 0.5) + z * y * y);
+export fn updates(x: f32) f32 {
+  var y: f32 = x;
+  const z: f32 = -0.5 * x;
+  y += y * (0.5 + z * y * y);
+  y += y * (0.5 + z * y * y);
+  return y;
+}

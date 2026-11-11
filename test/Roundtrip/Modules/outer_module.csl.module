@@ -1,0 +1,7 @@
+// A module that takes another module as a parameter
+
+param inner_mod : imported_module;
+
+fn call_inner_fn(a: i32, b: i32) i32 {
+  return inner_mod.add(a, b) * 2;
+}

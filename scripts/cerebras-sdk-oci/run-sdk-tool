@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+
+# Runs a Cerebras SDK host tool inside an OCI image converted from the SDK's
+# Singularity SIF. See README.md for the one-time conversion.
+#
+# Any OCI runtime works. Apple Container is preferred on macOS because
+# Apptainer cannot run there; Docker and Podman are equivalent otherwise and
+# differ only in how the image architecture is selected.
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <cslc|cs_python> [arguments...]" >&2
+  exit 2
+fi
+
+tool=$1
+shift
+
+# The image tag is chosen when the SIF is converted, so it has no default here:
+# a built-in one would silently pin an SDK version and fail deep inside a
+# container invocation once the SDK is upgraded.
+image=${CEREBRAS_SDK_IMAGE:-}
+architecture=${CEREBRAS_SDK_CONTAINER_ARCH:-amd64}
+
+if [[ -z "${image}" ]]; then
+  self_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+  echo "error: set CEREBRAS_SDK_IMAGE to the OCI image converted from the" \
+       "SDK's SIF (see ${self_dir}/README.md)" >&2
+  exit 1
+fi
+
+find_container_bin() {
+  if [[ -n "${CEREBRAS_CONTAINER_BIN:-}" ]]; then
+    printf '%s\n' "${CEREBRAS_CONTAINER_BIN}"
+    return
+  fi
+  if [[ "$(uname -s)" == "Darwin" && -x /usr/local/bin/container ]]; then
+    printf '%s\n' /usr/local/bin/container
+    return
+  fi
+  local candidate
+  for candidate in container podman docker; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      command -v "${candidate}"
+      return
+    fi
+  done
+  echo "error: no OCI runtime found on PATH (container, podman, docker);" \
+       "set CEREBRAS_CONTAINER_BIN" >&2
+  exit 1
+}
+
+container_bin=$(find_container_bin)
+
+if [[ ! -x "${container_bin}" ]]; then
+  echo "error: OCI runtime is not executable: ${container_bin}" >&2
+  exit 1
+fi
+
+# Apple Container selects the image architecture with `--arch amd64`; the
+# Docker CLI and Podman use OCI platform strings instead.
+case "$(basename "${container_bin}")" in
+  container)
+    architecture_args=(--arch "${architecture}")
+    ;;
+  *)
+    architecture_args=(--platform "linux/${architecture}")
+    ;;
+esac
+
+work_dir=$(pwd -P)
+mount_sources=("${work_dir}")
+mount_targets=("${work_dir}")
+
+add_mount_path() {
+  local path=$1
+  local target=${2:-}
+  local source
+
+  if [[ ! -d "${path}" ]]; then
+    echo "error: SDK container import path is not a directory: ${path}" >&2
+    exit 1
+  fi
+  source=$(cd "${path}" && pwd -P)
+  if [[ -z "${target}" ]]; then
+    target=${source}
+  fi
+
+  local existing_target
+  for existing_target in "${mount_targets[@]}"; do
+    if [[ "${target}" == "${existing_target}" ]]; then
+      return
+    fi
+  done
+  mount_sources+=("${source}")
+  mount_targets+=("${target}")
+}
+
+add_mount_for_argument_path() {
+  local path=$1
+
+  if [[ -d "${path}" ]]; then
+    add_mount_path "${path}" "${path}"
+  elif [[ -e "${path}" ]]; then
+    add_mount_path "$(dirname "${path}")" "$(dirname "${path}")"
+  elif [[ -d "$(dirname "${path}")" ]]; then
+    # Also cover output paths whose final component does not exist yet.
+    add_mount_path "$(dirname "${path}")" "$(dirname "${path}")"
+  fi
+}
+
+if [[ -n "${CSL_IMPORT_PATH:-}" ]]; then
+  old_ifs=$IFS
+  IFS=:
+  read -r -a import_paths <<< "${CSL_IMPORT_PATH}"
+  IFS=$old_ifs
+  for path in "${import_paths[@]}"; do
+    [[ -z "${path}" ]] || add_mount_path "${path}"
+  done
+fi
+
+# csl-pp invokes cslc with an absolute path to its generated layout in a
+# temporary directory. Make all absolute path arguments visible at the same
+# location inside the container, including --option=/absolute/path forms.
+for argument in "$@"; do
+  case "${argument}" in
+    /*)
+      add_mount_for_argument_path "${argument}"
+      ;;
+    *=/*)
+      add_mount_for_argument_path "${argument#*=}"
+      ;;
+  esac
+done
+
+container_args=(
+  run
+  "${architecture_args[@]}"
+  --rm
+  --workdir "${work_dir}"
+)
+for ((i = 0; i < ${#mount_sources[@]}; ++i)); do
+  container_args+=(
+    --mount "type=bind,source=${mount_sources[i]},target=${mount_targets[i]}"
+  )
+done
+
+case "${tool}" in
+  cslc)
+    sdk_command=(sdk_debug_shell compile)
+    ;;
+  cs_python)
+    sdk_command=(python)
+    ;;
+  *)
+    echo "error: unsupported SDK tool: ${tool}" >&2
+    exit 2
+    ;;
+esac
+
+exec "${container_bin}" "${container_args[@]}" "${image}" \
+  "${sdk_command[@]}" "$@"

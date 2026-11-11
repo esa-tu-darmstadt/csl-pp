@@ -1,0 +1,42 @@
+---
+title: Quickstart
+description: Compile a CSL example of the Cerebras SDK with csl-pp, then a first program with an async task.
+---
+
+import Example from '../../../components/Example.astro';
+
+This page assumes that `csl-pp` and the Cerebras SDK are on your `PATH`, as described in [Installation](../installation/).
+
+## Compile a CSL program
+
+`csl-pp` takes the same arguments as `cslc`, and every CSL program is a csl++ program. Copy the first GEMV tutorial of the SDK and compile it with `csl-pp` in place of `cslc`:
+
+```bash
+cp -r ~/cerebras-sdk/csl-extras-*/examples/tutorials/gemv-01-complete-program .
+cd gemv-01-complete-program
+csl-pp --arch=wse3 ./layout.csl --fabric-dims=8,3 --fabric-offsets=4,1 \
+  -o out --memcpy --channels 1
+cs_python run.py --name out
+```
+
+`csl-pp` writes the CSL it generates to a temporary directory and runs `cslc` on it. `out/` contains the output of `cslc`, and `run.py` runs on the simulator as with `cslc`. `cs_python` is in the SDK directory.
+
+## A first async task
+
+The program in `website/examples/start/quickstart` of the repository runs one PE that doubles a vector with two asynchronous DSD operations: a copy, then an addition of the copy. In CSL, the second operation would start in a task that the first one activates. In csl++, both are in one `async task`:
+
+<Example file="start/quickstart/src/pe.csl" region="task" />
+
+`suspend` ends the task until the operation started before it activates the task again; execution then continues after the `suspend`. The operations run on explicit DSRs because, as in CSL, only operations with a fabric or DSR operand can be asynchronous. `@current_task()` is the ID of the task that runs the code, here `double_task`. `compute` is called by the host; it initializes the async runtime with `@coro_runtime_init()` and starts the task. The task ID is claimed with `@claim_local_task()` instead of being chosen by number.
+
+Compile and run it from its directory:
+
+<Example file="start/quickstart/commands_wse3.sh" />
+
+`run.py` prints `SUCCESS!` when the PE returns `2 x`.
+
+## Next
+
+- The [Tutorial](../../tutorial/) writes a conjugate gradient solver with the csl++ libraries.
+- [csl-pp](../../tools/csl-pp/) describes what `csl-pp` generates and its options.
+- [Async functions and tasks](../../language/async/) is the reference of the async extensions.

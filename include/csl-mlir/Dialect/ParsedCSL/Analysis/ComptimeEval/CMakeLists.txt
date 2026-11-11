@@ -1,0 +1,5 @@
+set(LLVM_TARGET_DEFINITIONS ComptimeInterfaces.td)
+mlir_tablegen(ComptimeInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(ComptimeInterfaces.cpp.inc -gen-op-interface-defs)
+add_public_tablegen_target(MLIRParsedCSLComptimeInterfacesIncGen)
+add_dependencies(mlir-headers MLIRParsedCSLComptimeInterfacesIncGen)

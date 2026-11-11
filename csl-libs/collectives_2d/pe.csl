@@ -1,0 +1,796 @@
+// collectives_2d: PE part.
+//
+// Collective operations along one dimension of the rectangle: the row of
+// the PE (x) or its column (y). The PE program imports this module once
+// per dimension it uses, with the x or y member of the struct that the
+// layout part's get_params(px, py) returns. The two instances are
+// independent and can run operations at the same time.
+//
+// Async functions:
+//   broadcast(root, buf, count)                   root sends buf[0..count)
+//                                                 to every other PE.
+//   scatter(root, send_buf, recv_buf, count)      root sends the i-th chunk
+//                                                 of count elements of
+//                                                 send_buf to PE i.
+//   gather(root, send_buf, recv_buf, count)       PE i sends send_buf[0..count)
+//                                                 to root, which stores it
+//                                                 as the i-th chunk of recv_buf.
+//   reduce_fadds(root, send_buf, recv_buf, count) root receives the elementwise
+//                                                 f32 sum of all send_buf.
+//
+// They are called with @await from an async function or async task, after
+// init() has run once on the PE:
+//
+//   const mpi_x = @import_module("collectives_2d/pe.csl", .{ .dim_params = c2d_params.x });
+//   ...
+//   mpi_x.init();
+//   @await(mpi_x.broadcast(0, @ptrcast([*]u32, &buf), count));
+//
+// Each operation configures the routes, filters and switches of the
+// dimension's two colors for its root and count, runs the data transfer,
+// and tears the routes down again; the root sends the teardown wavelets.
+// The operation returns when the teardown has reached the PE.
+//
+// Resources: the layout part claims the two colors of each dimension;
+// this part claims two input queues and two output queues at compile
+// time. It uses the DSRs dest, src0 and src1 with the index dsr_id while
+// an operation runs.
+//
+// Requirements:
+//   - The program calls @coro_runtime_init() before its first async task
+//     is activated, as for every program with async tasks.
+//   - init() is called once before the first operation.
+//   - At most one operation of an instance runs at a time.
+//
+// How it works
+//
+// The PEs of the dimension form a line; POS_DIR and NEG_DIR are the two
+// directions along it, and pe_id is the index of the PE in the line. The
+// dimension has two colors. DATA_COLOR_0 carries broadcast, scatter and
+// gather; the reduction uses both colors, alternating from PE to PE.
+//
+// Broadcast. The root sends on RAMP towards both ends of the line; every
+// other PE forwards away from the root and takes a copy (RAMP). The root
+// sends the teardown after the data.
+//
+// Scatter. A broadcast of the whole send buffer, with a counting filter on
+// DATA_COLOR_0 at each PE that lets only the PE's own chunk through to the
+// RAMP: the filter counter starts at an offset that depends on pe_id and
+// passes count wavelets out of every NUM_PES * count. The root copies its
+// chunk locally.
+//
+// Gather. Every PE sends towards the root. A PE between the root and an
+// end of the line forwards what comes from further out and has a second
+// switch position whose receive side is RAMP; it sends its own chunk
+// after the chunk from further out has passed (the fabout DSD has
+// .advance_switch, so the end of its data advances the switch of the next
+// PE). The PEs on the far side of the root send their chunks in reverse
+// order so that the root receives them with one DSD operation. When the
+// root is in the middle, PE 0 sends an Advance wavelet that flips the
+// root's switch to receive from the other side.
+//
+// Reduce. The partial sums flow towards the root from both ends. A PE
+// between an end and the root receives on one color and adds its buffer
+// to what it receives, sending the sum on the other color (an fadds with
+// a fabric input and a fabric output). The two colors alternate, so that
+// no PE receives and sends on the same color. The root receives from the
+// POS side first, then adds what comes from the NEG side, then adds its
+// own buffer. Both colors are torn down afterwards, in two phases.
+//
+// Every operation configures the routes, switches and filters of its
+// colors at runtime (configure_*_network), runs its DSD operations on the
+// explicit DSRs of this instance, and ends with a teardown that resets
+// the colors on every PE and calls the teardown handler, which completes
+// the operation on that PE. The operation suspends until the teardown
+// has arrived, unless it already has.
+//
+// The topologies, routes and filters are those of the collectives_2d
+// library of the Cerebras SDK; the callback tasks and the lock task of
+// that library are replaced by async functions.
+
+param dim_params;
+
+// Index of the DSRs (dest, src0 and src1) that the operations use. By
+// default, the x instance uses set 1 and the y instance set 2, so that
+// operations of both can run at the same time.
+param dsr_id: u16 = dim_params.DIM_ID + 1;
+
+const dest_dsr = @get_dsr(dsr_dest, dsr_id);
+const src0_dsr = @get_dsr(dsr_src0, dsr_id);
+const src1_dsr = @get_dsr(dsr_src1, dsr_id);
+
+const layout_module = @import_module("<layout>");
+const tile_config = @import_module("<tile_config>");
+const ctrl = @import_module("ctrl_wavelet.csl");
+const color_config = tile_config.color_config;
+const switch_config = tile_config.switch_config;
+
+const POS_DIR = dim_params.POS_DIR;
+const NEG_DIR = dim_params.NEG_DIR;
+
+const DATA_COLOR_0 = dim_params.DATA_COLOR_0;
+const DATA_COLOR_1 = dim_params.DATA_COLOR_1;
+const NUM_PES = dim_params.NUM_PES;
+const DIM_ID = dim_params.DIM_ID;
+
+// The index of the PE in this dimension; set by init().
+var pe_id: u16;
+
+var reduce_color_neg: color;
+var reduce_color_pos: color;
+
+const COLOR_0_IQ: input_queue = @claim_input_queue();
+const COLOR_1_IQ: input_queue = @claim_input_queue();
+
+const COLOR_0_OQ: output_queue = @claim_output_queue();
+const COLOR_1_OQ: output_queue = @claim_output_queue();
+
+const data_0_fabin  = @get_dsd(fabin_dsd,  .{ .fabric_color = DATA_COLOR_0, .extent = 1, .input_queue  = COLOR_0_IQ });
+const data_1_fabin  = @get_dsd(fabin_dsd,  .{ .fabric_color = DATA_COLOR_1, .extent = 1, .input_queue  = COLOR_1_IQ });
+const data_0_fabout = @get_dsd(fabout_dsd, .{ .fabric_color = DATA_COLOR_0, .extent = 1, .output_queue = COLOR_0_OQ });
+const data_1_fabout = @get_dsd(fabout_dsd, .{ .fabric_color = DATA_COLOR_1, .extent = 1, .output_queue = COLOR_1_OQ });
+
+var reduce_neg_fabin:  fabin_dsd;
+var reduce_pos_fabin:  fabin_dsd;
+var reduce_neg_fabout: fabout_dsd;
+var reduce_pos_fabout: fabout_dsd;
+
+const reduce_fabins  = [2]fabin_dsd  { data_0_fabin,  data_1_fabin  };
+const reduce_fabouts = [2]fabout_dsd { data_0_fabout, data_1_fabout };
+
+const Ftype = enum(u16) { broadcast, scatter, gather, reduce_fadds };
+const Network_Config = struct {
+    root: u16,
+    count: u16,
+    type: Ftype,
+};
+
+// Placeholder buffer for mem1d_dsd before its base address is patched.
+var invalid_u32 = @zeros([1]u32);
+
+var cur_network_cfg = Network_Config {
+    .root = 0,
+    .count = 0,
+    .type = Ftype.broadcast,
+};
+
+// Buffer + DSDs for sending teardown / advance / reset control wavelets.
+var ctrl_buf = @zeros([1]u32);
+const ctrl_mem        = @get_dsd(mem1d_dsd,  .{ .tensor_access = |i|{1} -> ctrl_buf[i] });
+const ctrl_out        = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = DATA_COLOR_0, .control = true, .output_queue = COLOR_0_OQ });
+const color1_ctrl_out = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = DATA_COLOR_1, .control = true, .output_queue = COLOR_1_OQ });
+
+var lib_initialized: bool = false;
+
+// Determines the PE's index in the dimension and the colors of the
+// reduction, which alternate from PE to PE. Call once before the first
+// operation.
+fn init() void {
+
+    var coords = [2]u16 { layout_module.get_x_coord(), layout_module.get_y_coord() };
+    pe_id = coords[DIM_ID];
+
+    const reduce_colors = [2]color { DATA_COLOR_0, DATA_COLOR_1 };
+    reduce_color_neg = reduce_colors[pe_id % 2];
+    reduce_color_pos = reduce_colors[(pe_id + 1) % 2];
+
+    reduce_neg_fabin = reduce_fabins[pe_id % 2];
+    reduce_pos_fabin = reduce_fabins[(pe_id + 1) % 2];
+
+    reduce_neg_fabout = reduce_fabouts[pe_id % 2];
+    reduce_pos_fabout = reduce_fabouts[(pe_id + 1) % 2];
+
+    lib_initialized = true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Teardown synchronization
+////////////////////////////////////////////////////////////////////////////////
+
+// An operation ends when its teardown wavelets have passed the PE:
+// td_needed is 1 for broadcast, scatter and gather, which use DATA_COLOR_0
+// only, and 2 for reduce_fadds, which uses both colors. The teardown
+// handlers are ordinary functions that the hardware calls; they activate
+// the task that waits in the operation, if it is already waiting.
+var td_count: u16 = 0;
+var td_needed: u16 = 1;
+var td_received: bool = false;
+var td_awaiting: bool = false;
+var td_waiter_task: local_task_id;
+
+fn td_signal() void {
+    td_count += 1;
+    if (td_count == td_needed) {
+        td_count = 0;
+        td_received = true;
+        if (td_awaiting) {
+            td_awaiting = false;
+            @activate(td_waiter_task);
+        }
+    }
+}
+
+fn teardown_handler_0() void { td_signal(); }
+fn teardown_handler_1() void { td_signal(); }
+
+////////////////////////////////////////////////////////////////////////////////
+// Async functions
+////////////////////////////////////////////////////////////////////////////////
+
+// Every operation follows the same steps: configure the routes for the
+// root, run the data transfer, send the teardown wavelets, and wait for
+// the teardown to arrive unless it already has.
+
+// Sends buf[0..count) of the root to every other PE of the dimension.
+async fn broadcast(root: u16, buf: [*]u32, count: u16) void {
+    @assert(lib_initialized);
+    cur_network_cfg = Network_Config { .root = root, .count = count, .type = Ftype.broadcast };
+
+    clear_filter_and_switch();
+    configure_broadcast_network();
+
+    td_count = 0;
+    td_needed = 1;
+    td_received = false;
+    td_awaiting = false;
+
+    @await(async_transfer_data_broadcast(buf, count));
+
+    initiate_teardowns_one_color();
+
+    if (!td_received) {
+        td_waiter_task = @current_task();
+        td_awaiting = true;
+        suspend;
+    }
+}
+
+// Sends the i-th chunk of count elements of the root's send_buf to PE i,
+// which receives it in recv_buf[0..count). The root copies its own chunk.
+async fn scatter(root: u16, send_buf: [*]u32, recv_buf: [*]u32, count: u16) void {
+    @assert(lib_initialized);
+    cur_network_cfg = Network_Config { .root = root, .count = count, .type = Ftype.scatter };
+
+    clear_filter_and_switch();
+    configure_scatter_network();
+
+    td_count = 0;
+    td_needed = 1;
+    td_received = false;
+    td_awaiting = false;
+
+    @await(async_transfer_data_scatter(send_buf, recv_buf, count));
+
+    initiate_teardowns_one_color();
+
+    if (!td_received) {
+        td_waiter_task = @current_task();
+        td_awaiting = true;
+        suspend;
+    }
+}
+
+// Every PE i sends send_buf[0..count) to the root, which stores it as the
+// i-th chunk of recv_buf. The root copies its own chunk.
+async fn gather(root: u16, send_buf: [*]u32, recv_buf: [*]u32, count: u16) void {
+    @assert(lib_initialized);
+    cur_network_cfg = Network_Config { .root = root, .count = count, .type = Ftype.gather };
+
+    clear_filter_and_switch();
+    configure_gather_network();
+
+    td_count = 0;
+    td_needed = 1;
+    td_received = false;
+    td_awaiting = false;
+
+    @await(async_transfer_data_gather(send_buf, recv_buf, count));
+
+    initiate_teardowns_gather();
+
+    if (!td_received) {
+        td_waiter_task = @current_task();
+        td_awaiting = true;
+        suspend;
+    }
+}
+
+// The root receives in recv_buf[0..count) the elementwise sum of
+// send_buf[0..count) over all PEs. The PEs on either side of the root add
+// their values to the partial sums that pass them, on alternating colors.
+async fn reduce_fadds(root: u16, send_buf: [*]f32, recv_buf: [*]f32, count: u16) void {
+    @assert(lib_initialized);
+    cur_network_cfg = Network_Config { .root = root, .count = count, .type = Ftype.reduce_fadds };
+
+    clear_filter_and_switch();
+    configure_reduce_network(DATA_COLOR_0);
+    configure_reduce_network(DATA_COLOR_1);
+
+    td_count = 0;
+    td_needed = 2;
+    td_received = false;
+    td_awaiting = false;
+
+    @await(async_transfer_data_reduce(@ptrcast([*]u32, send_buf), @ptrcast([*]u32, recv_buf), count));
+
+    @await(async_initiate_teardowns_reduce());
+
+    if (!td_received) {
+        td_waiter_task = @current_task();
+        td_awaiting = true;
+        suspend;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// DSD helpers
+//
+// The DSDs are loaded into the explicit DSRs of this instance, so that
+// all operations share one DSR set. An asynchronous operation activates
+// @current_task() when it completes; the async function that started it
+// suspends until then.
+////////////////////////////////////////////////////////////////////////////////
+
+fn fabin_to_mem_async(m: mem1d_dsd, f: fabin_dsd) void {
+    @load_to_dsr(dest_dsr, m);
+    @load_to_dsr(src1_dsr, f, .{ .async = true, .activate = @current_task() });
+    @mov32(dest_dsr, src1_dsr, .{ .async = true });
+}
+
+fn mem_to_fabout_async(f: fabout_dsd, m: mem1d_dsd) void {
+    @load_to_dsr(dest_dsr, f, .{ .async = true, .activate = @current_task() });
+    @load_to_dsr(src1_dsr, m);
+    @mov32(dest_dsr, src1_dsr, .{ .async = true });
+}
+
+fn mem_to_fabout_no_activate(f: fabout_dsd, m: mem1d_dsd) void {
+    @load_to_dsr(dest_dsr, f, .{ .async = true });
+    @load_to_dsr(src1_dsr, m);
+    @mov32(dest_dsr, src1_dsr, .{ .async = true });
+}
+
+fn fadds_fabout_fabin_mem(dst: fabout_dsd, src0: fabin_dsd, src1: mem1d_dsd) void {
+    @load_to_dsr(dest_dsr, dst,  .{ .async = true, .activate = @current_task() });
+    @load_to_dsr(src0_dsr, src0, .{ .async = true });
+    @load_to_dsr(src1_dsr, src1);
+    @fadds(dest_dsr, src0_dsr, src1_dsr, .{ .async = true });
+}
+
+fn fadds_mem_fabin_mem(dst: mem1d_dsd, src0: fabin_dsd, src1: mem1d_dsd) void {
+    @load_to_dsr(dest_dsr, dst);
+    @load_to_dsr(src0_dsr, src0, .{ .async = true, .activate = @current_task() });
+    @load_to_dsr(src1_dsr, src1);
+    @fadds(dest_dsr, src0_dsr, src1_dsr, .{ .async = true });
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Internal: the data transfers, one per operation
+////////////////////////////////////////////////////////////////////////////////
+
+// Scratch DSDs; base address and length are set per operation.
+var mem = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> invalid_u32[i] });
+var fabout = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = DATA_COLOR_0, .output_queue = COLOR_0_OQ });
+var fabin  = @get_dsd(fabin_dsd,  .{ .extent = 1, .fabric_color = DATA_COLOR_0, .input_queue  = COLOR_0_IQ });
+var fabout_adv = @get_dsd(fabout_dsd, .{ .extent = 1, .fabric_color = DATA_COLOR_0, .output_queue = COLOR_0_OQ, .advance_switch = true });
+
+async fn async_transfer_data_broadcast(buf: [*]u32, count: u16) void {
+    if (cur_network_cfg.root == pe_id) {
+        fabout = @set_dsd_length(fabout, count);
+        mem = @set_dsd_length(mem, count);
+        mem = @set_dsd_base_addr(mem, buf);
+        mem_to_fabout_async(fabout, mem);
+        suspend;
+    } else {
+        fabin = @set_dsd_length(fabin, count);
+        mem = @set_dsd_length(mem, count);
+        mem = @set_dsd_base_addr(mem, buf);
+        fabin_to_mem_async(mem, fabin);
+        suspend;
+    }
+}
+
+async fn async_transfer_data_scatter(send_buf: [*]u32, recv_buf: [*]u32, count: u16) void {
+    if (cur_network_cfg.root == pe_id) {
+        // (1) Copy the root's own chunk locally (scatter has no R->R route).
+        var dst = @set_dsd_length(mem, count);
+        dst = @set_dsd_base_addr(dst, recv_buf);
+
+        var src = @set_dsd_length(mem, count);
+        src = @set_dsd_base_addr(src, send_buf);
+        src = @increment_dsd_offset(src, @as(i16, pe_id * count), u32);
+
+        @load_to_dsr(dest_dsr, dst);
+        @load_to_dsr(src1_dsr, src);
+        @mov32(dest_dsr, src1_dsr);
+
+        // (2) Broadcast (with filter installed) to scatter to other PEs.
+        fabout = @set_dsd_length(fabout, count * NUM_PES);
+        mem = @set_dsd_length(mem, count * NUM_PES);
+        mem = @set_dsd_base_addr(mem, send_buf);
+
+        mem_to_fabout_async(fabout, mem);
+        suspend;
+    } else {
+        fabin = @set_dsd_length(fabin, count);
+        mem = @set_dsd_length(mem, count);
+        mem = @set_dsd_base_addr(mem, recv_buf);
+
+        fabin_to_mem_async(mem, fabin);
+        suspend;
+    }
+}
+
+async fn async_transfer_data_gather(send_buf: [*]u32, recv_buf: [*]u32, count: u16) void {
+    const root = cur_network_cfg.root;
+
+    if (root == pe_id) {
+        // Root: receive NEG-dir block, copy local block, receive POS-dir block.
+        if (root != 0) {
+            const neg_dir_size = count * root;
+            fabin = @set_dsd_length(fabin, neg_dir_size);
+
+            mem = @set_dsd_base_addr(mem, recv_buf);
+            mem = @set_dsd_length(mem, neg_dir_size);
+            mem = @increment_dsd_offset(mem, @as(i16, neg_dir_size) - 1, u32);
+
+            // Receive in reverse so the senders can use a single mem1d_dsd op.
+            const rev = @set_dsd_stride(mem, -1);
+            fabin_to_mem_async(rev, fabin);
+            suspend;
+        }
+
+        // Copy our own chunk into recv_buf at offset root*count.
+        mem = @set_dsd_length(mem, count);
+        const src = @set_dsd_base_addr(mem, send_buf);
+        mem = @set_dsd_base_addr(mem, recv_buf);
+        mem = @increment_dsd_offset(mem, @as(i16, root * count), u32);
+        @load_to_dsr(dest_dsr, mem);
+        @load_to_dsr(src1_dsr, src);
+        @mov32(dest_dsr, src1_dsr);
+
+        if (root != NUM_PES - 1) {
+            const offset = (root + 1) * count;
+            const pos_dir_size = (NUM_PES - root - 1) * count;
+
+            fabin = @set_dsd_length(fabin, pos_dir_size);
+
+            mem = @set_dsd_base_addr(mem, recv_buf);
+            mem = @set_dsd_length(mem, pos_dir_size);
+            mem = @increment_dsd_offset(mem, @as(i16, offset), u32);
+
+            fabin_to_mem_async(mem, fabin);
+            suspend;
+        }
+    } else {
+        // Non-root: send our data (PEs with pe_id < root send reversed).
+        fabout_adv = @set_dsd_length(fabout_adv, count);
+        mem = @set_dsd_length(mem, count);
+        mem = @set_dsd_base_addr(mem, send_buf);
+
+        var tmp = mem;
+        if (pe_id < root) {
+            tmp = @increment_dsd_offset(tmp, @as(i16, count) - 1, u32);
+            tmp = @set_dsd_stride(tmp, -1);
+        }
+
+        @load_to_dsr(dest_dsr, fabout_adv, .{ .async = true, .activate = @current_task() });
+        @load_to_dsr(src1_dsr, tmp);
+        @mov32(dest_dsr, src1_dsr, .{ .async = true });
+        suspend;
+
+        // PE 0 (when root is in the middle) sends the Advance ctrl wavelet
+        // that flips the root's switch to receive from POS_DIR.
+        if (pe_id == 0 and root != 0 and root != NUM_PES - 1) {
+            ctrl_buf[0] = comptime ctrl.wavelet(.{ .cmd0 = .{ .no_ce = true, .type = ctrl.Cmd.Advance } });
+            mem_to_fabout_async(ctrl_out, ctrl_mem);
+            suspend;
+        }
+    }
+}
+
+async fn async_transfer_data_reduce(send_buf: [*]u32, recv_buf: [*]u32, count: u16) void {
+    const root = cur_network_cfg.root;
+
+    reduce_pos_fabin  = @set_dsd_length(reduce_pos_fabin,  count);
+    reduce_neg_fabin  = @set_dsd_length(reduce_neg_fabin,  count);
+    reduce_pos_fabout = @set_dsd_length(reduce_pos_fabout, count);
+    reduce_neg_fabout = @set_dsd_length(reduce_neg_fabout, count);
+    mem = @set_dsd_length(mem, count);
+
+    if (pe_id == root) {
+        // Pass 1: receive from POS (or NEG for end PEs) into recv_buf.
+        mem = @set_dsd_base_addr(mem, recv_buf);
+        if (pe_id == 0) {
+            fabin_to_mem_async(mem, reduce_pos_fabin);
+            suspend;
+        } else if (pe_id == NUM_PES - 1) {
+            fabin_to_mem_async(mem, reduce_neg_fabin);
+            suspend;
+        } else {
+            // Two-color reduce: receive POS first, then add NEG.
+            fabin_to_mem_async(mem, reduce_pos_fabin);
+            suspend;
+            mem = @set_dsd_length(mem, count);
+            mem = @set_dsd_base_addr(mem, recv_buf);
+            fadds_mem_fabin_mem(mem, reduce_neg_fabin, mem);
+            suspend;
+        }
+
+        // Pass 2: add our own send_buf contribution into recv_buf.
+        mem = @set_dsd_length(mem, count);
+        const src = @set_dsd_base_addr(mem, send_buf);
+        const dst = @set_dsd_base_addr(mem, recv_buf);
+        @load_to_dsr(dest_dsr, dst);
+        @load_to_dsr(src0_dsr, dst);
+        @load_to_dsr(src1_dsr, src);
+        @fadds(dest_dsr, src0_dsr, src1_dsr);
+    } else {
+        // Non-root PE: route a single async fadds (or pure forward at the ends)
+        // through the alternating-color network.
+        mem = @set_dsd_base_addr(mem, send_buf);
+        if (pe_id == 0) {
+            mem_to_fabout_async(reduce_pos_fabout, mem);
+            suspend;
+        } else if (pe_id == NUM_PES - 1) {
+            mem_to_fabout_async(reduce_neg_fabout, mem);
+            suspend;
+        } else if (pe_id < root) {
+            fadds_fabout_fabin_mem(reduce_pos_fabout, reduce_neg_fabin, mem);
+            suspend;
+        } else {
+            fadds_fabout_fabin_mem(reduce_neg_fabout, reduce_pos_fabin, mem);
+            suspend;
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Internal: teardown initiation (per-Ftype)
+////////////////////////////////////////////////////////////////////////////////
+
+// Used by broadcast / scatter — root sends one Teardown wavelet on color 0.
+fn initiate_teardowns_one_color() void {
+    if (pe_id == cur_network_cfg.root) {
+        ctrl_buf[0] = comptime ctrl.wavelet(.{ .cmd0 = .{ .no_ce = true, .type = ctrl.Cmd.Teardown } });
+        mem_to_fabout_no_activate(ctrl_out, ctrl_mem);
+    }
+}
+
+// Gather teardown: the PEs at the ends of the dimension send the
+// teardown, and the one on the far side of the root also resets the
+// root's switch. See the diagrams in the collectives_2d library of the
+// Cerebras SDK.
+fn initiate_teardowns_gather() void {
+    const cur_root = cur_network_cfg.root;
+
+    if (pe_id == 0) {
+        if (cur_root == 0) return;
+        ctrl_buf[0] = comptime ctrl.wavelet(.{ .cmd0 = .{ .no_ce = true, .type = ctrl.Cmd.Teardown } });
+        mem_to_fabout_no_activate(ctrl_out, ctrl_mem);
+    } else if (pe_id == NUM_PES - 1) {
+        if (cur_root == NUM_PES - 1) return;
+        if (cur_root != 0) {
+            ctrl_buf[0] = comptime ctrl.wavelet(.{
+                .cmd0 = .{ .no_ce = true, .type = ctrl.Cmd.Teardown },
+                .cmd1 = .{ .no_ce = true, .type = ctrl.Cmd.Reset },
+            });
+        } else {
+            ctrl_buf[0] = comptime ctrl.wavelet(.{
+                .cmd0 = .{ .no_ce = true, .type = ctrl.Cmd.Teardown },
+                .cmd1 = .{ .no_ce = true, .type = ctrl.Cmd.Teardown },
+            });
+        }
+        mem_to_fabout_no_activate(ctrl_out, ctrl_mem);
+    }
+}
+
+// Reduce teardown is a 2-phase send (the extreme PEs send their R->R color
+// first, then everyone except the root sends on their reduce direction).
+// The two phases must be serialized because they share a single output DSR.
+async fn async_initiate_teardowns_reduce() void {
+    const cur_root = cur_network_cfg.root;
+
+    ctrl_buf[0] = comptime ctrl.wavelet(.{ .cmd0 = .{ .no_ce = true, .type = ctrl.Cmd.Teardown } });
+
+    // Phase 1: extreme PEs send a TD on their R->R color.
+    if (pe_id == 0) {
+        mem_to_fabout_async(ctrl_out, ctrl_mem);
+        suspend;
+    } else if (pe_id == NUM_PES - 1) {
+        if (NUM_PES % 2 == 0) {
+            mem_to_fabout_async(ctrl_out, ctrl_mem);
+        } else {
+            mem_to_fabout_async(color1_ctrl_out, ctrl_mem);
+        }
+        suspend;
+    }
+
+    // Phase 2: all PEs except the root send a TD on their reduce direction.
+    if (pe_id < cur_root) {
+        if (reduce_color_pos == DATA_COLOR_0) {
+            mem_to_fabout_no_activate(ctrl_out, ctrl_mem);
+        } else {
+            mem_to_fabout_no_activate(color1_ctrl_out, ctrl_mem);
+        }
+    } else if (cur_root < pe_id and pe_id < NUM_PES) {
+        if (reduce_color_neg == DATA_COLOR_0) {
+            mem_to_fabout_no_activate(ctrl_out, ctrl_mem);
+        } else {
+            mem_to_fabout_no_activate(color1_ctrl_out, ctrl_mem);
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Routing configuration
+////////////////////////////////////////////////////////////////////////////////
+
+fn clear_filter_and_switch() void {
+    const filter_id = @get_filter_id(DATA_COLOR_0);
+
+    tile_config.filters.set_max_counter(filter_id, 0);
+    tile_config.filters.set_active_limit(filter_id, 0);
+    tile_config.filters.set_counter(filter_id, 0);
+
+    switch_config.clear_current_position(DATA_COLOR_0);
+    switch_config.set_invalid_for_all_switch_positions(DATA_COLOR_0);
+
+    switch_config.set_pop_mode(DATA_COLOR_0, tile_config.target.pop_mode.NO_POP);
+}
+
+fn configure_broadcast_network() void {
+    const addr = color_config.get_color_config_addr(DATA_COLOR_0);
+    const root = cur_network_cfg.root;
+
+    if (pe_id == root) {
+        if (pe_id == 0) {
+            color_config.reset_routes(addr, .{ .tx = POS_DIR, .rx = RAMP });
+        } else if (pe_id == NUM_PES - 1) {
+            color_config.reset_routes(addr, .{ .tx = NEG_DIR, .rx = RAMP });
+        } else {
+            color_config.reset_routes(addr, .{ .tx = [2]direction{POS_DIR, NEG_DIR}, .rx = RAMP });
+        }
+    } else {
+        if (pe_id == 0) {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = POS_DIR });
+        } else if (pe_id == NUM_PES - 1) {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = NEG_DIR });
+        } else if (pe_id < root) {
+            color_config.reset_routes(addr, .{ .tx = [2]direction{RAMP, NEG_DIR}, .rx = POS_DIR });
+        } else {
+            color_config.reset_routes(addr, .{ .tx = [2]direction{RAMP, POS_DIR}, .rx = NEG_DIR });
+        }
+    }
+
+    tile_config.teardown.exit(DATA_COLOR_0);
+}
+
+fn configure_scatter_filter() void {
+    const chunk_size = cur_network_cfg.count;
+    const send_size = NUM_PES * cur_network_cfg.count;
+
+    const init_counter = (send_size - pe_id * chunk_size) % send_size;
+
+    const filter_id = @get_filter_id(DATA_COLOR_0);
+    tile_config.filters.set_max_counter(filter_id, chunk_size - 1);
+    tile_config.filters.set_active_limit(filter_id, send_size - 1);
+    tile_config.filters.set_counter(filter_id, init_counter);
+}
+
+fn configure_scatter_network() void {
+    configure_scatter_filter();
+    configure_broadcast_network();
+}
+
+fn configure_gather_network() void {
+    const root = cur_network_cfg.root;
+    const addr = color_config.get_color_config_addr(DATA_COLOR_0);
+
+    if (pe_id == root) {
+        if (pe_id == 0) {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = POS_DIR });
+        } else if (pe_id == NUM_PES - 1) {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = NEG_DIR });
+        } else {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = NEG_DIR });
+        }
+    } else if (pe_id == 0) {
+        color_config.reset_routes(addr, .{ .tx = POS_DIR, .rx = RAMP });
+    } else if (pe_id == NUM_PES - 1) {
+        color_config.reset_routes(addr, .{ .tx = NEG_DIR, .rx = RAMP });
+    } else if (pe_id < root) {
+        color_config.reset_routes(addr, .{ .tx = POS_DIR, .rx = RAMP });
+    } else {
+        color_config.reset_routes(addr, .{ .tx = NEG_DIR, .rx = RAMP });
+    }
+
+    switch_config.clear_current_position(DATA_COLOR_0);
+    switch_config.set_invalid_for_all_switch_positions(DATA_COLOR_0);
+
+    if (pe_id == root) {
+        if (pe_id > 0 and pe_id < NUM_PES - 1) {
+            switch_config.set_rx_switch_pos1(DATA_COLOR_0, POS_DIR);
+            switch_config.set_current_switch_position(DATA_COLOR_0, 0);
+        }
+    } else if (pe_id == 0) {
+    } else if (pe_id == NUM_PES - 1) {
+    } else if (pe_id < root) {
+        switch_config.set_rx_switch_pos1(DATA_COLOR_0, NEG_DIR);
+        switch_config.set_current_switch_position(DATA_COLOR_0, 0);
+    } else {
+        switch_config.set_rx_switch_pos1(DATA_COLOR_0, POS_DIR);
+        switch_config.set_current_switch_position(DATA_COLOR_0, 0);
+    }
+
+    if (pe_id == root + 1) {
+        switch_config.set_pop_mode(DATA_COLOR_0, tile_config.target.pop_mode.ALWAYS_POP);
+    }
+
+    tile_config.teardown.exit(DATA_COLOR_0);
+}
+
+fn configure_reduce_network(td_color: color) void {
+    const root = cur_network_cfg.root;
+    const addr = color_config.get_color_config_addr(td_color);
+
+    if (td_color == reduce_color_neg) {
+        if (pe_id == 0) {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = RAMP });
+        } else if (pe_id <= root) {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = NEG_DIR });
+        } else {
+            color_config.reset_routes(addr, .{ .tx = NEG_DIR, .rx = RAMP });
+        }
+    } else if (td_color == reduce_color_pos) {
+        if (pe_id == NUM_PES - 1) {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = RAMP });
+        } else if (pe_id < root) {
+            color_config.reset_routes(addr, .{ .tx = POS_DIR, .rx = RAMP });
+        } else {
+            color_config.reset_routes(addr, .{ .tx = RAMP, .rx = POS_DIR });
+        }
+    }
+
+    tile_config.teardown.exit(td_color);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Comptime configuration
+////////////////////////////////////////////////////////////////////////////////
+
+comptime {
+    @initialize_queue(COLOR_0_IQ, .{ .color = DATA_COLOR_0 });
+    @initialize_queue(COLOR_1_IQ, .{ .color = DATA_COLOR_1 });
+
+    const filter = .{
+        .count_data = true,
+        .kind = .{ .counter = true },
+        .init_counter = 0,
+        .max_counter = 0,
+        .limit1 = 0,
+    };
+
+    const pe_min = dim_params.pe_min;
+    const pe_max = dim_params.pe_max;
+
+    if (pe_min) {
+        @set_local_color_config(DATA_COLOR_0, .{ .routes = .{ .rx = .{ RAMP },    .tx = .{ POS_DIR } },         .filter = filter, .teardown = true });
+    } else if (pe_max) {
+        @set_local_color_config(DATA_COLOR_0, .{ .routes = .{ .rx = .{ NEG_DIR }, .tx = .{ RAMP } },            .filter = filter, .teardown = true });
+    } else {
+        @set_local_color_config(DATA_COLOR_0, .{ .routes = .{ .rx = .{ NEG_DIR }, .tx = .{ RAMP, POS_DIR } },   .filter = filter, .teardown = true });
+    }
+    @set_local_color_config(DATA_COLOR_1, .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ RAMP } }, .teardown = true });
+}
+
+comptime {
+    if (@is_arch("wse3")) {
+        @initialize_queue(COLOR_0_OQ, .{ .color = DATA_COLOR_0 });
+        @initialize_queue(COLOR_1_OQ, .{ .color = DATA_COLOR_1 });
+    }
+}
+
+comptime {
+    @set_teardown_handler(teardown_handler_0, DATA_COLOR_0);
+    @set_teardown_handler(teardown_handler_1, DATA_COLOR_1);
+}

@@ -1,0 +1,14 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Fold dereference(address_of(x)) -> x
+// =============================================================================
+
+// CHECK: export fn deref_addr_of(param0: *i32) i32 {
+// CHECK:     var y: i32 = param0.*;
+// CHECK:     return y;
+// CHECK: }
+export fn deref_addr_of(x: *i32) i32 {
+    var y: i32 = x.*;
+    return (&y).*;
+}

@@ -1,0 +1,17 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Constant false condition: while loop removed entirely
+// =============================================================================
+
+// CHECK: export fn const_while_false(param0: i32) i32 {
+// CHECK:     var result: i32 = param0;
+// CHECK:     return result;
+// CHECK: }
+export fn const_while_false(x: i32) i32 {
+    var result: i32 = x;
+    while (false) {
+        result += 1;
+    }
+    return result;
+}

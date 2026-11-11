@@ -1,0 +1,64 @@
+param memcpy_params;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// result[0]: 1 if a runtime claim differs from the compile-time claim
+// result[1]: 1 if claiming a color took one free color
+// result[2]: 1 if a released color is free again
+// result[3]: 1 if the task bound at runtime ran
+var result: [4]u32;
+var result_ptr: [*]u32 = &result;
+
+// region: comptime
+// Claimed at compile time: these are constants in the generated CSL.
+const fixed_color: color = @claim_color();
+const done_task_id: local_task_id = @claim_local_task();
+// endregion
+
+// region: runtime
+fn check_claims() void {
+  // Claimed at runtime: never one of the colors claimed at compile time.
+  const c = @claim_color();
+  result[0] = if (@get_int(c) != @get_int(fixed_color)) 1 else 0;
+
+  const free = @count_free(color);
+  const d = @claim_color();
+  result[1] = if (@count_free(color) == free - 1) 1 else 0;
+
+  // A released color is free again.
+  @release_color(d);
+  result[2] = if (@count_free(color) == free) 1 else 0;
+
+  @release_color(c);
+}
+// endregion
+
+// region: bind
+task worker() void {
+  result[3] = 1;
+  @activate(done_task_id);
+}
+
+fn start_worker() void {
+  // Claim a task ID and bind a task to it while the program runs.
+  const id = @claim_local_task();
+  @bind_local_task(worker, id);
+  @activate(id);
+}
+// endregion
+
+task done() void {
+  sys_mod.unblock_cmd_stream();
+}
+
+// Called by the host.
+fn compute() void {
+  check_claims();
+  start_worker();
+}
+
+comptime {
+  @bind_local_task(done, done_task_id);
+  @export_symbol(result_ptr, "result");
+  @export_symbol(compute);
+}

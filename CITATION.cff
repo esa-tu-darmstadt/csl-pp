@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: >-
+  If you use csl++ in your research, please cite the paper that describes its
+  coroutines.
+title: csl++
+abstract: >-
+  An open-source language frontend for the Cerebras Software Language (CSL).
+type: software
+repository-code: https://github.com/esa-tu-darmstadt/csl-pp
+url: https://esa-tu-darmstadt.github.io/csl-pp/
+authors:
+  - name: Embedded Systems and Applications Group, Technical University of Darmstadt
+keywords:
+  - Cerebras
+  - CSL
+  - wafer-scale computing
+  - coroutines
+  - MLIR
+preferred-citation:
+  type: conference-paper
+  title: Structured Coroutines for the Wafer-Scale Engine
+  authors:
+    - given-names: Tim
+      family-names: Noack
+      affiliation: Technical University of Darmstadt
+    - given-names: Andreas
+      family-names: Koch
+      affiliation: Technical University of Darmstadt
+  collection-title: >-
+    Proceedings of the 2027 IEEE/ACM International Symposium on Code
+    Generation and Optimization (CGO '27)
+  conference:
+    name: CGO '27
+    city: Salt Lake City
+    region: UT
+    country: US
+    date-start: 2027-03-20
+    date-end: 2027-03-24
+  year: 2027
+  notes: To appear

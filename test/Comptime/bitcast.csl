@@ -1,0 +1,123 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// @bitcast - f16 to u16 (IEEE-754 binary16 1.0 = 0x3c00)
+// =============================================================================
+
+comptime {
+  const one: f16 = 1.0;
+  const bits = @bitcast(u16, one);
+  // expected-remark @+1 {{15360}}
+  @comptime_print(bits);
+  // expected-remark @+1 {{u16}}
+  @comptime_print(@type_of(bits));
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - u16 to f16 (0xffff -> NaN)
+// =============================================================================
+
+comptime {
+  const all_ones: u16 = 0xffff;
+  const val = @bitcast(f16, all_ones);
+  // expected-remark @+1 {{f16}}
+  @comptime_print(@type_of(val));
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - i32 to f32
+// =============================================================================
+
+comptime {
+  // IEEE-754 binary32 1.0 = 0x3f800000
+  const bits: i32 = 0x3f800000;
+  const val = @bitcast(f32, bits);
+  // expected-remark @+1 {{1}}
+  @comptime_print(val);
+  // expected-remark @+1 {{f32}}
+  @comptime_print(@type_of(val));
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - f32 to u32
+// =============================================================================
+
+comptime {
+  const val: f32 = 1.0;
+  const bits = @bitcast(u32, val);
+  // expected-remark @+1 {{1065353216}}
+  @comptime_print(bits);
+  // expected-remark @+1 {{u32}}
+  @comptime_print(@type_of(bits));
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - identity (same type)
+// =============================================================================
+
+comptime {
+  const x: u16 = 42;
+  const y = @bitcast(u16, x);
+  // expected-remark @+1 {{42}}
+  @comptime_print(y);
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - cb16 to u16 (CB16 1.0 = 21504)
+// =============================================================================
+
+comptime {
+  const one: cb16 = 1.0;
+  const bits = @bitcast(u16, one);
+  // expected-remark @+1 {{21504}}
+  @comptime_print(bits);
+  // expected-remark @+1 {{u16}}
+  @comptime_print(@type_of(bits));
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - u16 to cb16
+// =============================================================================
+
+comptime {
+  const bits: u16 = 21504;
+  const val = @bitcast(cb16, bits);
+  // expected-remark @+1 {{1}}
+  @comptime_print(val);
+  // expected-remark @+1 {{cb16}}
+  @comptime_print(@type_of(val));
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - mismatched bit widths (error)
+// =============================================================================
+
+comptime {
+  const x: u32 = 42;
+  // expected-error @+1 {{bitcast requires matching bit widths, got 32 and 16}}
+  @bitcast(u16, x);
+}
+
+// -----
+
+// =============================================================================
+// @bitcast - runtime context (not comptime-only)
+// =============================================================================
+
+export fn test_runtime_bitcast(val: f32) u32 {
+  return @bitcast(u32, val);
+}

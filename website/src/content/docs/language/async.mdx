@@ -1,0 +1,97 @@
+---
+title: Async functions and tasks
+description: async fn, async task, suspend, @current_task() and @coro_runtime_init().
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+An async function or async task can suspend: it ends the current run of its hardware task and continues at the same point when the task is activated again. Its local variables keep their values and their addresses in between.
+
+## `async fn`
+
+```csl
+async fn name(parameters) ReturnType { ... }
+```
+
+An async function takes parameters and returns a value like any function. It can contain `suspend`, call other async functions with [`@await`](../calls/) and [`@await_parallel`](../calls/), and call ordinary functions.
+
+<Example file="language/async/src/pe.csl" region="async-fn" />
+
+Rules:
+
+- An async function can only be called from an async function or async task, and only as the argument of `@await` or `@await_parallel`: `@await(next(1))`. The call has no value of its own and cannot be stored or passed on.
+- An async function cannot be evaluated at comptime.
+- An async function cannot be `extern`.
+- An async function can have `comptime` parameters and can be declared in a module and called through the module, like other functions.
+
+## `async task`
+
+```csl
+async task name() void { ... }
+```
+
+An async task is a task that can suspend. It is bound to a task ID with `@bind_local_task` in a `comptime` block, and started with `@activate` or by the completion of an asynchronous operation, like any task:
+
+<Example file="language/async/src/pe.csl" region="task" />
+
+The task ID must be known at compile time, and the bind must be made at compile time. When an async task returns, its next activation starts it again from the beginning.
+
+<Aside type="caution" title="Async data and control tasks">
+Async tasks can also be bound with `@bind_data_task` and `@bind_control_task`. The parameter of an async data task holds the wavelet of the activation that started or resumed the task most recently: after a `suspend`, it holds the wavelet that resumed the task. Support for async data and control tasks is not complete yet.
+</Aside>
+
+## `suspend`
+
+```csl
+suspend;
+```
+
+`suspend` ends the current run of the hardware task that executes it. When the task is activated the next time, execution continues after the `suspend`.
+
+`suspend` does not start anything that activates the task again. Before `suspend`, start an operation that activates the task when it completes, usually an asynchronous DSD operation with `.activate = @current_task()`:
+
+```csl
+@fmovs(out_dsd, x_dsd, .{ .async = true, .activate = @current_task() });
+suspend;
+```
+
+`@activate(@current_task())` directly before `suspend` resumes the task as soon as other activated tasks have run.
+
+If the operation completes before the task reaches `suspend`, the activation is kept: the task runs again as soon as the current run ends, and continues after the `suspend` right away.
+
+Any activation of the task resumes it, whatever its cause. A task that is suspended must therefore not be activated for another purpose. A suspended task whose activation never comes is never resumed. A suspended task does not block other tasks of the PE: they run as usual while it waits.
+
+`suspend` is only allowed in async functions and async tasks.
+
+## `@current_task()`
+
+```csl
+@current_task() local_task_id
+```
+
+Returns the ID of the hardware task that executes the call:
+
+- in an async task, the task itself;
+- in an async function called with `@await`, the task of the caller;
+- in a call of `@await_parallel` that runs on a worker task, the worker task.
+
+Use it as the `.activate` target of an asynchronous operation before `suspend`, so that the operation resumes the code that started it.
+
+## `@coro_runtime_init()`
+
+```csl
+@coro_runtime_init() void
+```
+
+Sets up the runtime that suspends and resumes async tasks. A program that binds an async task must call `@coro_runtime_init()` once, before the first async task is activated. Usually, the function that the host launches calls it before it activates the first task. `csl-pp` reports an error if a program binds an async task and never calls `@coro_runtime_init()` (see [Troubleshooting](../../guides/troubleshooting/#messages-of-csl-pp)), and a remark if a program calls it without binding an async task.
+
+## Local variables
+
+Local variables of async functions and tasks keep their values across `suspend`. They also keep their addresses, so an asynchronous DSD operation can read or write a local variable while the function is suspended. In the [allreduce library](../../libraries/allreduce/), `allreduce_nrm2` reduces a local variable `buf` that the DSD operations of several phases access through a pointer.
+
+Each async task has a stack of its own for these variables; see [Stacks](../stacks/).
+
+## Deadlocks
+
+Deadlocks between PEs are possible as in CSL. For example, two PEs that each wait for data from the other wait forever.

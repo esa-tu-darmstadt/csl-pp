@@ -1,0 +1,84 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Basic layout block roundtrip
+// =============================================================================
+
+// CHECK: export fn dummy() void {
+// CHECK: }
+// CHECK: layout {
+// CHECK:     @export_name("test", fn() void);
+// CHECK: }
+export fn dummy() void {
+}
+
+layout {
+    @export_name("test", fn()void);
+}
+
+// -----
+
+// =============================================================================
+// Layout block with loop unrolling
+// =============================================================================
+
+// CHECK: export fn dummy2() void {
+// CHECK: }
+// CHECK: layout {
+// CHECK:     @export_name("unrolled", fn() void);
+// CHECK:     @export_name("unrolled", fn() void);
+// CHECK: }
+export fn dummy2() void {
+}
+
+layout {
+    for (@range(i16, 2)) |x| {
+        @export_name("unrolled", fn()void);
+    }
+}
+
+// -----
+
+// =============================================================================
+// Comptime block stays as comptime (not layout)
+// =============================================================================
+
+// CHECK: export fn dummy3() void {
+// CHECK: }
+// CHECK: comptime {
+// CHECK:     @export_name("comptime_test", fn() void);
+// CHECK:     @export_name("comptime_test", fn() void);
+// CHECK: }
+export fn dummy3() void {
+}
+
+comptime {
+    for (@range(i16, 2)) |x| {
+        @export_name("comptime_test", fn()void);
+    }
+}
+
+// -----
+
+// =============================================================================
+// Mixed layout and comptime blocks are correctly separated
+// =============================================================================
+
+// CHECK: export fn dummy4() void {
+// CHECK: }
+// CHECK: comptime {
+// CHECK:     @export_name("from_comptime", fn() void);
+// CHECK: }
+// CHECK: layout {
+// CHECK:     @export_name("from_layout", fn() void);
+// CHECK: }
+export fn dummy4() void {
+}
+
+layout {
+    @export_name("from_layout", fn()void);
+}
+
+comptime {
+    @export_name("from_comptime", fn()void);
+}

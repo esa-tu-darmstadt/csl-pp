@@ -1,0 +1,157 @@
+// RUN: csl-s2s %s --split-input-file | FileCheck %s
+
+// =============================================================================
+// Basic enum definition with explicit values
+// =============================================================================
+
+const colors = enum(u16) {
+    red,
+    white = 5,
+    blue,
+};
+
+// CHECK: const [[colors:.*]] = enum(u16) { red, white = 5, blue };
+// CHECK: export fn get_white() [[colors]] {
+// CHECK:     return [[colors]].white;
+// CHECK: }
+export fn get_white() colors {
+    return colors.white;
+}
+
+// -----
+
+// =============================================================================
+// Enum cast to underlying integer
+// =============================================================================
+
+const status = enum(i8) {
+    ok,
+    warning = 10,
+    failed,
+};
+
+// CHECK: export fn status_to_int() i8 {
+// CHECK:     return @as(i8, 10);
+// CHECK: }
+export fn status_to_int() i8 {
+    const s: status = status.warning;
+    return @as(i8, s);
+}
+
+// -----
+
+// =============================================================================
+// Cast from integer to enum
+// =============================================================================
+
+const compass = enum(u8) {
+    north,
+    east,
+    south,
+    west,
+};
+
+// CHECK: const [[compass:.*]] = enum(u8) { north, east, south, west };
+// CHECK: export fn int_to_compass() [[compass]] {
+// CHECK:     return [[compass]].south;
+// CHECK: }
+export fn int_to_compass() compass {
+    return @as(compass, 2);
+}
+
+// -----
+
+// =============================================================================
+// Enum equality comparison
+// =============================================================================
+
+const mode = enum(u32) {
+    read,
+    write,
+    append,
+};
+
+// CHECK: export fn is_write() bool {
+// CHECK:     return true;
+// CHECK: }
+export fn is_write() bool {
+    const m: mode = mode.write;
+    return m == mode.write;
+}
+
+// CHECK: export fn is_not_read() bool {
+// CHECK:     return true;
+// CHECK: }
+export fn is_not_read() bool {
+    const m: mode = mode.append;
+    return m != mode.read;
+}
+
+// -----
+
+// =============================================================================
+// @get_int builtin for enums
+// =============================================================================
+
+const priority = enum(u16) {
+    low,
+    medium = 50,
+    high = 100,
+};
+
+// CHECK: export fn get_priority_value() u16 {
+// CHECK:     return @as(u16, 50);
+// CHECK: }
+export fn get_priority_value() u16 {
+    const p: priority = priority.medium;
+    return @get_int(p);
+}
+
+// -----
+
+// =============================================================================
+// Auto-incrementing enum values
+// =============================================================================
+
+const sequential = enum(u8) {
+    a,
+    b,
+    c,
+    d,
+};
+
+// CHECK: export fn get_c_value() u8 {
+// CHECK:     return @as(u8, 2);
+// CHECK: }
+export fn get_c_value() u8 {
+    return @as(u8, sequential.c);
+}
+
+// -----
+
+// =============================================================================
+// Enum with gaps in values
+// =============================================================================
+
+const sparse = enum(u16) {
+    first = 10,
+    second,
+    third = 100,
+    fourth,
+};
+
+// CHECK: export fn test_sparse_enum() u16 {
+// CHECK:     return @as(u16, 11);
+// CHECK: }
+export fn test_sparse_enum() u16 {
+    // second should be 11 (first + 1)
+    return @as(u16, sparse.second);
+}
+
+// CHECK: export fn test_sparse_enum_fourth() u16 {
+// CHECK:     return @as(u16, 101);
+// CHECK: }
+export fn test_sparse_enum_fourth() u16 {
+    // fourth should be 101 (third + 1)
+    return @as(u16, sparse.fourth);
+}

@@ -1,0 +1,4 @@
+// A module that re-exports another module as a const field.
+// Tests the pattern: wrapper.mod.some_function()
+
+const mod = @import_module("Modules/simple_module.csl.module");

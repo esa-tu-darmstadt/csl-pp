@@ -1,0 +1,6 @@
+add_subdirectory(Conversion)
+add_subdirectory(Dialect)
+add_subdirectory(Pipelines)
+add_subdirectory(Support)
+add_subdirectory(Target)
+add_subdirectory(Tools)

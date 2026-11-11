@@ -1,0 +1,30 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+//
+// The address of a comptime-known const local refers to its storage, so the
+// local is kept instead of being folded into its value.
+
+fn pointer_target() void {}
+
+// CHECK-LABEL: export fn address_of_const_local() void {
+// CHECK-NEXT:    const fp: *const fn() void = &pointer_target;
+// CHECK-NEXT:    const pp: *const *const fn() void = &fp;
+// CHECK-NEXT:    pp.*();
+export fn address_of_const_local() void {
+  const fp: *const fn() void = pointer_target;
+  const pp = &fp;
+  pp.*();
+}
+
+// -----
+
+const Point = struct { x: i32, y: i32 };
+
+// CHECK-LABEL: export fn address_of_const_field() i32 {
+// CHECK-NEXT:    const p: [[POINT:.*]] = [[POINT]] { .x = 1, .y = 2 };
+// CHECK-NEXT:    const py: *const i32 = &p.y;
+// CHECK-NEXT:    return py.*;
+export fn address_of_const_field() i32 {
+  const p = Point{ .x = 1, .y = 2 };
+  const py = &p.y;
+  return py.*;
+}

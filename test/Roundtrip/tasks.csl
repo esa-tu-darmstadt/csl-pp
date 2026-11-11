@@ -1,0 +1,42 @@
+// RUN: csl-s2s %s --split-input-file | FileCheck %s
+
+// =============================================================================
+// Task function with local task binding
+// =============================================================================
+
+// CHECK: task my_task() void {
+// CHECK: }
+task my_task() void {
+}
+
+// CHECK: comptime {
+// CHECK:     @bind_local_task(my_task, @get_local_task_id(1));
+// CHECK: }
+comptime {
+    @bind_local_task(my_task, @get_local_task_id(1));
+}
+
+// -----
+
+// =============================================================================
+// Activate builtin
+// =============================================================================
+
+// CHECK: task do_work() void {
+// CHECK: }
+task do_work() void {
+}
+
+// CHECK: export fn trigger() void {
+// CHECK:     @activate(@get_local_task_id(2));
+// CHECK: }
+export fn trigger() void {
+    @activate(@get_local_task_id(2));
+}
+
+// CHECK: comptime {
+// CHECK:     @bind_local_task(do_work, @get_local_task_id(2));
+// CHECK: }
+comptime {
+    @bind_local_task(do_work, @get_local_task_id(2));
+}

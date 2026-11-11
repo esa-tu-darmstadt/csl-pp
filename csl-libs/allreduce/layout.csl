@@ -1,0 +1,48 @@
+// allreduce: layout part.
+//
+// Import this module in the layout file and pass the result of
+// get_params(px, py) to the PE program of each PE, which imports the PE
+// part (pe.csl) with it:
+//
+//   const reduce = @import_module("allreduce/layout.csl", .{
+//     .width = width, .height = height,
+//   });
+//   ...
+//   @set_tile_code(px, py, "pe.csl", .{
+//     .reduce_params = reduce.get_params(px, py),
+//     ...
+//   });
+//
+// The module claims the one color that the reduction uses. Each import of
+// the module is a separate instance with a color of its own.
+
+param width: i16;   // width of the rectangle
+param height: i16;  // height of the rectangle
+
+// region: claim
+const C0: color = @claim_color();
+// endregion
+
+// Parameters of the PE part.
+const Params = struct {
+    first_px: bool,
+    last_px: bool,
+    first_py: bool,
+    last_py: bool,
+    C_ROUTE: color,
+    width: i16,
+    height: i16,
+};
+
+// Returns the parameters of the PE part for the PE at (px, py).
+fn get_params(px: i16, py: i16) Params {
+    return Params {
+        .first_px = (0 == px),
+        .last_px = ((width - 1) == px),
+        .first_py = (0 == py),
+        .last_py = ((height - 1) == py),
+        .C_ROUTE = C0,
+        .width = width,
+        .height = height
+    };
+}

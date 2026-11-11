@@ -1,0 +1,461 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Basic labeled block with break
+// =============================================================================
+
+// CHECK: export fn labeled_break(param0: i32) i32 {
+// CHECK:     var result: i32 = @as(i32, 0);
+// CHECK:     blk: {
+// CHECK:         result += @as(i32, 1);
+// CHECK:         if (param0 > @as(i32, 0))
+// CHECK:             break :blk;
+// CHECK:         result += @as(i32, 10);
+// CHECK:     }
+// CHECK:     result += @as(i32, 100);
+// CHECK:     return result;
+// CHECK: }
+export fn labeled_break(x: i32) i32 {
+    var result: i32 = 0;
+    blk: {
+        result += 1;
+        if (x > 0) {
+            break :blk;
+        }
+        result += 10;
+    }
+    result += 100;
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Nested labeled blocks
+// =============================================================================
+
+// CHECK: export fn nested_labeled(param0: i32) i32 {
+// CHECK:     var result: i32 = @as(i32, 0);
+// CHECK:     outer: {
+// CHECK:         inner: {
+// CHECK:             if (param0 > @as(i32, 0)) {
+// CHECK:                 break :outer;
+// CHECK:             }
+// CHECK:             if (param0 == @as(i32, 0)) {
+// CHECK:                 break :inner;
+// CHECK:             }
+// CHECK:             result = @as(i32, 1);
+// CHECK:         }
+// CHECK:         result += @as(i32, 10);
+// CHECK:     }
+// CHECK:     return result;
+// CHECK: }
+export fn nested_labeled(x: i32) i32 {
+    var result: i32 = 0;
+    outer: {
+        inner: {
+            if (x > 0) {
+                break :outer;
+            }
+            if (x == 0) {
+                break :inner;
+            }
+            result = 1;
+        }
+        result += 10;
+    }
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Labeled block around while loop with break :outer
+// =============================================================================
+
+// CHECK: export fn labeled_around_while(param0: i32) i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     outer: {
+// CHECK:         while (i < param0) {
+// CHECK:             if (i >= @as(i32, 5))
+// CHECK:                 break :outer;
+// CHECK:             sum += i;
+// CHECK:         }
+// CHECK:     }
+// CHECK:     return sum;
+// CHECK: }
+export fn labeled_around_while(n: i32) i32 {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    outer: {
+        while (i < n) {
+            if (i >= 5) {
+                break :outer;
+            }
+            sum += i;
+        }
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// While loop with break
+// =============================================================================
+
+// CHECK: export fn while_break(param0: i32) i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     while (i < param0) {
+// CHECK:         if (i >= @as(i32, 5))
+// CHECK:             break;
+// CHECK:         sum += i;
+// CHECK:         i += @as(i32, 1);
+// CHECK:     }
+// CHECK:     return sum;
+// CHECK: }
+export fn while_break(n: i32) i32 {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while (i < n) {
+        if (i >= 5) {
+            break;
+        }
+        sum += i;
+        i += 1;
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// While loop with continue
+// =============================================================================
+
+// CHECK: export fn while_continue(param0: i32) i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     while (i < param0) {
+// CHECK:         i += @as(i32, 1);
+// CHECK:         if (i == @as(i32, 3))
+// CHECK:             continue;
+// CHECK:         sum += i;
+// CHECK:     }
+// CHECK:     return sum;
+// CHECK: }
+export fn while_continue(n: i32) i32 {
+    var sum: i32 = 0;
+    var i: i32 = 0;
+    while (i < n) {
+        i += 1;
+        if (i == 3) {
+            continue;
+        }
+        sum += i;
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// Labeled block with conditional break and code after
+// =============================================================================
+
+// CHECK: export fn conditional_break(param0: i32, param1: i32) i32 {
+// CHECK:     var result: i32 = @as(i32, 0);
+// CHECK:     blk: {
+// CHECK:         if (param0 > @as(i32, 0)) {
+// CHECK:             result = param0;
+// CHECK:             break :blk;
+// CHECK:         }
+// CHECK:         if (param1 > @as(i32, 0)) {
+// CHECK:             result = param1;
+// CHECK:             break :blk;
+// CHECK:         }
+// CHECK:         result = @as(i32, -1);
+// CHECK:     }
+// CHECK:     return result;
+// CHECK: }
+export fn conditional_break(a: i32, b: i32) i32 {
+    var result: i32 = 0;
+    blk: {
+        if (a > 0) {
+            result = a;
+            break :blk;
+        }
+        if (b > 0) {
+            result = b;
+            break :blk;
+        }
+        result = -1;
+    }
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Labeled for loop with break (existing feature, for completeness)
+// =============================================================================
+
+// CHECK: export fn labeled_for([[rows:.*]]: *const [5]i32, [[cols:.*]]: *const [5]i32) i32 {
+// CHECK:     var found: i32 = @as(i32, 0);
+// CHECK:     outer: for ([[rows]].*) |row| {
+// CHECK:         for ([[cols]].*) |col| {
+// CHECK:             const [[product:.*]] = row * col;
+// CHECK:             if ([[product]] > @as(i32, 100)) {
+// CHECK:                 found = [[product]];
+// CHECK:                 break :outer;
+// CHECK:             }
+// CHECK:         }
+// CHECK:     }
+// CHECK:     return found;
+// CHECK: }
+export fn labeled_for(rows: *const [5]i32, cols: *const [5]i32) i32 {
+    var found: i32 = 0;
+    outer: for (rows.*) |row| {
+        for (cols.*) |col| {
+            if (row * col > 100) {
+                found = row * col;
+                break :outer;
+            }
+        }
+    }
+    return found;
+}
+
+// -----
+
+// =============================================================================
+// Error: continue cannot target labeled block
+// =============================================================================
+
+export fn continue_labeled_block(n: i32) void {
+    blk: {
+        // expected-error @+1 {{continue cannot target labeled block}}
+        continue :blk;
+    }
+}
+
+// -----
+
+// =============================================================================
+// labeled block breaks with different but compatible types (runtime conditional)
+// =============================================================================
+
+// CHECK: export fn compatible_break_types(param0: bool) i32 {
+// CHECK:     var result: i32 = blk: {
+// CHECK:         if (param0) {
+// CHECK:             break :blk @as(i32, 42);
+// CHECK:         } else {
+// CHECK:             break :blk @as(i32, 43);
+// CHECK:         }
+// CHECK:     };
+// CHECK:     return result;
+// CHECK: }
+export fn compatible_break_types(x: bool) i32 {
+    var result: i32 = blk: {
+        if (x) {
+            break :blk 42;
+        } else {
+            break :blk @as(i32, 43);
+        }
+    };
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Error: labeled block breaks with incompatible types by fallthrough (runtime conditional)
+// =============================================================================
+
+export fn incompatible_break_types(x: bool) i32 {
+    // expected-error @+1 {{labeled block has breaks with incompatible types: comptime_int and void}}
+    var result: i32 = blk: {
+        if (x) {
+            break :blk 42;
+        }
+        // fallthrough yields void, incompatible with comptime_int from break
+    };
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Error: labeled block breaks with incompatible types (runtime conditional)
+// =============================================================================
+
+export fn incompatible_break_types(x: bool) i32 {
+    // expected-error @+1 {{labeled block has breaks with incompatible types: comptime_int and comptime_float}}
+    var result: i32 = blk: {
+        if (x) {
+            break :blk 42;
+        } else {
+            break :blk 42.0;
+        }
+    };
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Cast break values to match function return type (comptime_int → i8)
+// Requires NormalizeCasts to push cast into labeled block breaks.
+// =============================================================================
+
+// CHECK: export fn cast_break_to_i8(param0: bool) i8 {
+// CHECK:     return blk: {
+// CHECK:         if (param0) {
+// CHECK:             break :blk @as(i8, 42);
+// CHECK:         } else {
+// CHECK:             break :blk @as(i8, 10);
+// CHECK:         }
+// CHECK:     };
+// CHECK: }
+export fn cast_break_to_i8(x: bool) i8 {
+    return blk: {
+        if (x) {
+            break :blk 42;
+        } else {
+            break :blk 10;
+        }
+    };
+}
+
+// -----
+
+// =============================================================================
+// Overflow: break value too large for target type after cast
+// =============================================================================
+
+export fn cast_break_overflow(x: bool) i8 {
+    return blk: {
+        if (x) {
+            // expected-error @+1 {{value 300 does not fit in i8}}
+            break :blk 300;
+        } else {
+            break :blk 10;
+        }
+    };
+}
+
+// -----
+
+// =============================================================================
+// Cast break values to match variable type (comptime_int → i32)
+// =============================================================================
+
+// CHECK: export fn cast_break_to_var(param0: bool) i32 {
+// CHECK:     var result: i32 = blk: {
+// CHECK:         if (param0) {
+// CHECK:             break :blk @as(i32, 42);
+// CHECK:         } else {
+// CHECK:             break :blk @as(i32, 10);
+// CHECK:         }
+// CHECK:     };
+// CHECK:     return result;
+// CHECK: }
+export fn cast_break_to_var(x: bool) i32 {
+    var result: i32 = blk: {
+        if (x) {
+            break :blk 42;
+        } else {
+            break :blk 10;
+        }
+    };
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// While loop with continuation expression
+// =============================================================================
+
+// CHECK: export fn while_continuation(param0: i32) void {
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     while (i < param0) : ({i += @as(i32, 1); }) {
+// CHECK:     }
+// CHECK: }
+export fn while_continuation(n: i32) void {
+    var i: i32 = 0;
+    while (i < n) : ({i += 1;}) {}
+}
+
+// -----
+
+// =============================================================================
+// Labeled while loop with continuation expression
+// =============================================================================
+
+// CHECK: export fn labeled_while_continuation(param0: i32) void {
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     loop: while (i < param0) : ({i += @as(i32, 1); }) {
+// CHECK:     }
+// CHECK: }
+export fn labeled_while_continuation(n: i32) void {
+    var i: i32 = 0;
+    loop: while (i < n) : ({i += 1;}) {}
+}
+
+// -----
+
+// =============================================================================
+// While continuation with function call
+// =============================================================================
+
+fn noop() void {}
+
+// CHECK: export fn while_call_continuation(param0: i32) void {
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     while (i < param0) : ({noop(); }) {
+// CHECK:         i += @as(i32, 1);
+// CHECK:     }
+// CHECK: }
+export fn while_call_continuation(n: i32) void {
+    var i: i32 = 0;
+    while (i < n) : ({noop();}) {
+        i += 1;
+    }
+}
+
+// -----
+
+// =============================================================================
+// While continuation with block (multiple statements)
+// =============================================================================
+
+// CHECK: export fn while_block_continuation(param0: i32) void {
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     var step: i32 = @as(i32, 1);
+// CHECK:     while (i < param0) : ({const tmp: i32 = step; i += tmp; }) {
+// CHECK:     }
+// CHECK: }
+export fn while_block_continuation(n: i32) void {
+    var i: i32 = 0;
+    var step: i32 = 1;
+    while (i < n) : ({ const tmp: i32 = step; i += tmp; }) {}
+}
+
+// -----
+
+// =============================================================================
+// While continuation with complex compound assignment
+// =============================================================================
+
+// CHECK: export fn while_complex_continuation(param0: i32, param1: i32, param2: i32) void {
+// CHECK:     var i: i32 = @as(i32, 0);
+// CHECK:     while (i < param0) : ({i += param1 + param2; }) {
+// CHECK:     }
+// CHECK: }
+export fn while_complex_continuation(n: i32, a: i32, b: i32) void {
+    var i: i32 = 0;
+    while (i < n) : ({i += a + b;}) {}
+}

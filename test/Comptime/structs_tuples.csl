@@ -1,0 +1,288 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic struct literal and field access
+// =============================================================================
+
+const Point = struct {
+  x: i32,
+  y: i32,
+};
+
+comptime {
+  const p = Point { .x = 10, .y = 20 };
+  // expected-remark @+1 {{10}}
+  @comptime_print(p.x);
+  // expected-remark @+1 {{20}}
+  @comptime_print(p.y);
+}
+
+// -----
+
+// =============================================================================
+// Struct with mutable fields (var)
+// =============================================================================
+
+const MutablePoint = struct {
+  x: i32,
+  y: i32,
+};
+
+comptime {
+  var p = MutablePoint { .x = 1, .y = 2 };
+  p.x = 10;
+  p.y = 20;
+  // expected-remark @+1 {{10}}
+  @comptime_print(p.x);
+  // expected-remark @+1 {{20}}
+  @comptime_print(p.y);
+}
+
+// -----
+
+// =============================================================================
+// Struct field update with computation
+// =============================================================================
+
+const ComputePoint = struct {
+  x: i32,
+  y: i32,
+};
+
+comptime {
+  var p = ComputePoint { .x = 5, .y = 10 };
+  p.x = p.x + p.y;
+  // expected-remark @+1 {{15}}
+  @comptime_print(p.x);
+}
+
+// -----
+
+// =============================================================================
+// Nested struct access
+// =============================================================================
+
+const Inner = struct {
+  value: i32,
+};
+
+const Outer = struct {
+  inner: Inner,
+  count: i32,
+};
+
+comptime {
+  const o = Outer {
+    .inner = Inner { .value = 42 },
+    .count = 1
+  };
+  // expected-remark @+1 {{42}}
+  @comptime_print(o.inner.value);
+  // expected-remark @+1 {{1}}
+  @comptime_print(o.count);
+}
+
+// -----
+
+// =============================================================================
+// Struct with different field types
+// =============================================================================
+
+const Mixed = struct {
+  int_field: i32,
+  bool_field: bool,
+};
+
+comptime {
+  const m = Mixed { .int_field = 100, .bool_field = true };
+  // expected-remark @+1 {{100}}
+  @comptime_print(m.int_field);
+  // expected-remark @+1 {{true}}
+  @comptime_print(m.bool_field);
+}
+
+// -----
+
+// =============================================================================
+// Anonymous tuple
+// =============================================================================
+
+comptime {
+  const t = .{ 1, 2, 3 };
+  // expected-remark @+1 {{1}}
+  @comptime_print(t[0]);
+  // expected-remark @+1 {{2}}
+  @comptime_print(t[1]);
+  // expected-remark @+1 {{3}}
+  @comptime_print(t[2]);
+}
+
+// -----
+
+// =============================================================================
+// Struct assigned to a compile-time const
+// =============================================================================
+
+const Config = struct {
+  width: i32,
+  height: i32,
+};
+
+const default_config = Config { .width = 640, .height = 480 };
+
+comptime {
+  // expected-remark @+1 {{640}}
+  @comptime_print(default_config.width);
+  // expected-remark @+1 {{480}}
+  @comptime_print(default_config.height);
+}
+
+// -----
+
+// =============================================================================
+// Chained field updates
+// =============================================================================
+
+const ChainPoint = struct {
+  x: i32,
+  y: i32,
+  z: i32,
+};
+
+comptime {
+  var p = ChainPoint { .x = 1, .y = 2, .z = 3 };
+  p.x = p.y;
+  p.y = p.z;
+  p.z = p.x + p.y;
+  // expected-remark @+1 {{2}}
+  @comptime_print(p.x);
+  // expected-remark @+1 {{3}}
+  @comptime_print(p.y);
+  // expected-remark @+1 {{5}}
+  @comptime_print(p.z);
+}
+
+// -----
+
+// =============================================================================
+// Tuple rvalue access
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{1}}
+  @comptime_print(.{ 1, 2, 3 }[0]);
+  // expected-remark @+1 {{2}}
+  @comptime_print(.{ 1, 2, 3 }[1]);
+  // expected-remark @+1 {{3}}
+  @comptime_print(.{ 1, 2, 3 }[2]);
+}
+
+// -----
+
+// =============================================================================
+// Struct rvalue access
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{1}}
+  @comptime_print(.{ .x = 1, .y = 2 }.x);
+  // expected-remark @+1 {{2}}
+  @comptime_print(.{ .x = 1, .y = 2 }.y);
+}
+
+// -----
+
+// =============================================================================
+// Accessing non-existent struct field
+// =============================================================================
+
+comptime {
+  // expected-error @+1 {{field 'z' not found in struct}}
+  @comptime_print(.{ .x = 1, .y = 2 }.z);
+}
+
+// -----
+
+// =============================================================================
+// Accessing non-existent tuple element
+// =============================================================================
+
+comptime {
+  // expected-error @+1 {{index 3 out of bounds for struct with 3 fields}}
+  @comptime_print(.{ 1, 2, 3 }[3]);
+}
+
+// -----
+
+// =============================================================================
+// A compile-time function returns an explicitly declared struct type
+// =============================================================================
+
+const ReturnedPoint = struct {
+  x: i32,
+  y: i32,
+};
+
+fn make_point() ReturnedPoint {
+  return ReturnedPoint { .x = 10, .y = 20 };
+}
+
+comptime {
+  const p = make_point();
+  // expected-remark @+1 {{10}}
+  @comptime_print(p.x);
+  // expected-remark @+1 {{20}}
+  @comptime_print(p.y);
+}
+
+// -----
+
+// =============================================================================
+// Anonymous struct fields are matched by name when coerced to a named struct
+// =============================================================================
+
+const ReorderedFields = struct {
+  first: i32,
+  second: bool,
+};
+
+fn make_reordered_fields() ReorderedFields {
+  return .{ .second = true, .first = 42 };
+}
+
+fn make_reordered_runtime(first: i32) ReorderedFields {
+  return .{ .second = true, .first = first };
+}
+
+comptime {
+  const value = make_reordered_fields();
+  // expected-remark @+1 {{42}}
+  @comptime_print(value.first);
+  // expected-remark @+1 {{true}}
+  @comptime_print(value.second);
+}
+
+// -----
+
+// =============================================================================
+// Parameterized struct type
+// =============================================================================
+
+fn PairType(comptime T: type) type {
+  return struct {
+    first: T,
+    second: T,
+  };
+}
+
+fn make_i32_pair() PairType(i32) {
+  return PairType(i32) { .first = 7, .second = 9 };
+}
+
+comptime {
+  const pair = make_i32_pair();
+  // expected-remark @+1 {{7}}
+  @comptime_print(pair.first);
+  // expected-remark @+1 {{9}}
+  @comptime_print(pair.second);
+}

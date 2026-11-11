@@ -1,0 +1,544 @@
+// allreduce: PE part.
+//
+// Reduces a vector over all PEs of the rectangle and leaves the result on
+// every PE. The reduction runs in three phases on one routable color: a
+// reduction along each row to its last PE, a reduction of those partial
+// results along the last column to the bottom-right PE, and a broadcast of
+// the result to all PEs. The routes of the color are reconfigured at
+// runtime before each phase.
+//
+// Async functions:
+//   allreduce(n, x, op)   Reduces x[0..n) over all PEs with op (ADD or MAX)
+//                         and leaves the result in x on every PE.
+//   allreduce_nrm2(val)   Returns the 2-norm of the vector that has one entry
+//                         val per PE.
+//
+// Both are called with @await from an async function or async task:
+//
+//   const reduce = @import_module("allreduce/pe.csl", .{
+//     .reduce_params = reduce_params,   // from the layout part's get_params
+//     .dsr_id = 1,                      // DSR set this instance may use
+//   });
+//   @await(reduce.allreduce(n, &x, reduce.TYPE_BINARY_OP.ADD));
+//
+// Resources: the layout part claims the color; this part claims one input
+// queue and one output queue at compile time. It uses the DSRs dest, src0
+// and src1 with the index `dsr_id` while an operation runs. Two instances
+// whose operations run at the same time need different DSR sets; instances
+// whose operations never overlap can share one.
+//
+// Requirements:
+//   - The rectangle is at least 2 PEs wide and 2 PEs high.
+//   - The program calls @coro_runtime_init() before its first async task
+//     is activated, as for every program with async tasks.
+//   - At most one operation of an instance runs at a time.
+//
+// How it works
+//
+// All three phases use the one color C_ROUTE. Its routes are rewritten at
+// runtime before each phase (rowReduce_configure, colReduce_configure,
+// bcast_configure), and each phase ends with a teardown control wavelet,
+// which resets the color on every PE it passes and calls the teardown
+// handler there. A phase on a PE is complete when its own DSD operations
+// have finished and the teardown has arrived; row_reduce, col_reduce and
+// broadcast wait for the teardown with a suspend if it has not arrived
+// yet. The teardown also separates the phases: the next phase can only
+// configure the color after the previous one is torn down everywhere.
+//
+// Row reduction (reduce_dsd with is_last_pe = last_px). The vector of
+// every PE of a row is accumulated in the last PE of the row:
+//
+//     P0 -----> P1 -----> P2 -----> P3 (last: receives and accumulates)
+//
+// The first PE sends on RAMP -> EAST, a middle PE forwards WEST -> EAST,
+// the last PE receives WEST -> RAMP. A middle PE has a second switch
+// position whose receive side is RAMP, so that it sends its own vector
+// instead of forwarding. The first PE sends x, which passes through the
+// middle PEs to the last PE, then a control wavelet that advances the
+// switch of its east neighbor (pop_on_advance: the neighbor consumes it).
+// Now the neighbor's send, which was waiting for the switch, goes east,
+// followed by its own advance wavelet for the next PE, and so on. The
+// last PE therefore receives the vectors of the PEs in order from west to
+// east, and accumulates each with op (fadds or fmaxs) as it arrives.
+// After its advance wavelet, the first PE sends the teardown wavelet,
+// which follows the data along the row.
+//
+// Column reduction (reduce_dsd with is_last_pe = last_py). The same from
+// north to south along the last column, where the row results are: the
+// bottom-right PE ends up with the result.
+//
+// Broadcast (broadcast_dsd). The bottom-right PE sends the result WEST
+// and NORTH; every other PE of the last column forwards it NORTH and
+// WEST and takes a copy (RAMP); every other PE forwards it WEST and
+// takes a copy. The bottom-right PE sends the teardown after the data.
+//
+// Every DSD operation is loaded into the three explicit DSRs of this
+// instance. One set of DSRs is enough, because the operations of a phase
+// run one after the other and the teardown separates the phases.
+//
+// The mechanism, the routes and the switch settings are those of the
+// allreduce library of the Cerebras SDK benchmarks; the callback tasks
+// and the state machine of that library are replaced by async functions.
+
+// The struct that the layout part's get_params(px, py) returns.
+param reduce_params;
+
+// Index of the DSRs (dest, src0 and src1) that the operations use.
+param dsr_id: u16 = 1;
+
+const C_ROUTE: color = reduce_params.C_ROUTE;
+const first_px: bool = reduce_params.first_px;
+const last_px: bool = reduce_params.last_px;
+const first_py: bool = reduce_params.first_py;
+const last_py: bool = reduce_params.last_py;
+const width: i16 = reduce_params.width;
+const height: i16 = reduce_params.height;
+
+const timestamp = @import_module("<time>");
+const math_lib = @import_module("<math>");
+
+const TYPE_BINARY_OP = enum(u16) { ADD, MAX };
+
+// The timestamp taken when the last operation completed. Benchmarks use it
+// as a reference clock that is nearly synchronous across PEs, because the
+// broadcast phase ends on all PEs within a few cycles.
+var tscRefBuffer = @zeros([timestamp.tsc_size_words]u16);
+
+////////////////////////////////////////////////////////////////////////////////
+// State of the running operation
+////////////////////////////////////////////////////////////////////////////////
+
+var x: [*]f32;                                    // the vector being reduced
+var functor: TYPE_BINARY_OP = TYPE_BINARY_OP.ADD; // the reduction operator
+var wvlts_per_pe: u16 = 0;                        // its length
+
+////////////////////////////////////////////////////////////////////////////////
+// Queues, DSRs and DSDs
+////////////////////////////////////////////////////////////////////////////////
+
+// region: claims
+const iq_route: input_queue = @claim_input_queue();
+const oq_route: output_queue = @claim_output_queue();
+// endregion
+
+const dest_dsr = @get_dsr(dsr_dest, dsr_id);
+const src0_dsr = @get_dsr(dsr_src0, dsr_id);
+const src1_dsr = @get_dsr(dsr_src1, dsr_id);
+
+const dummy = @zeros([1]i16);
+
+// Rebound to x with the length of the operation.
+var mem_x_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> dummy[i] });
+
+var fab_trans_x_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .fabric_color = C_ROUTE,
+    .output_queue = oq_route
+});
+
+const fab_trans_ctrl_wdsd = @get_dsd(fabout_dsd, .{
+    .extent = 1,
+    .control = true,
+    .fabric_color = C_ROUTE,
+    .output_queue = oq_route
+});
+
+var fab_recv_wdsd = @get_dsd(fabin_dsd, .{
+   .extent = 1,
+   .fabric_color = C_ROUTE,
+   .input_queue = iq_route
+});
+
+const switches = @import_module("<memcpy/memcpy_switches>");
+
+// A control wavelet that advances the switch of the receiving PE, and one
+// that tears the route down.
+var ctrl_11 = [1]u32{ switches.ctrl(switches.switch_cmd_11()) };
+var mem_ctrl_buf_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> ctrl_11[i] });
+
+const teardown_buf = [1]u32{ switches.ctrl(switches.teardown_cmd_1()) };
+const mem_buf_td_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> teardown_buf[i] });
+
+////////////////////////////////////////////////////////////////////////////////
+// Async functions
+////////////////////////////////////////////////////////////////////////////////
+
+// Reduces x[0..n) over all PEs with op and leaves the result in x on every
+// PE. Returns when the result is in x.
+async fn allreduce(n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP) void {
+    @assert(n > 0);
+    x = in_tensor;
+    functor = op;
+    wvlts_per_pe = @bitcast(u16, n);
+
+    @await(row_reduce(wvlts_per_pe));
+    @await(col_reduce(wvlts_per_pe));
+    @await(broadcast(wvlts_per_pe));
+
+    timestamp.get_timestamp(&tscRefBuffer);
+}
+
+// Returns the 2-norm of the vector that has the entry val on each PE. The
+// squares are scaled by a power of two near the largest |val| so that the
+// sum cannot overflow:
+//   1. alpha = max over all PEs of |val|, rounded to a power of two
+//   2. sum = allreduce(ADD) of (|val| / alpha)^2
+//   3. result = alpha * sqrt(sum)
+async fn allreduce_nrm2(val: f32) f32 {
+    // The reductions work on buf through x. buf is a local variable of this
+    // async function, so it keeps its address while the function is
+    // suspended.
+    var buf: f32 = math_lib.abs(val);
+    const local_abs = buf;
+    x = @ptrcast([*]f32, &buf);
+    wvlts_per_pe = 1;
+
+    functor = TYPE_BINARY_OP.MAX;
+    @await(row_reduce(wvlts_per_pe));
+    @await(col_reduce(wvlts_per_pe));
+    @await(broadcast(wvlts_per_pe));
+    // buf is max(|val|) over all PEs.
+
+    var alpha_val: f32 = 0.0;
+    var inv_alpha_val: f32 = 0.0;
+    approx(buf, &alpha_val, &inv_alpha_val);
+    buf = local_abs * inv_alpha_val;
+    buf = buf * buf;
+
+    functor = TYPE_BINARY_OP.ADD;
+    @await(row_reduce(wvlts_per_pe));
+    @await(col_reduce(wvlts_per_pe));
+    @await(broadcast(wvlts_per_pe));
+    // buf is the sum of (|val| / alpha)^2 over all PEs.
+
+    buf = math_lib.sqrt(buf) * alpha_val;
+
+    timestamp.get_timestamp(&tscRefBuffer);
+    return buf;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Waiting for the teardown
+////////////////////////////////////////////////////////////////////////////////
+
+// Each phase ends when the teardown control wavelet has passed through the
+// PE, which returns the color to its teardown state. The teardown handler
+// is an ordinary function that the hardware calls; it activates the task
+// that waits in the phase, if the phase is already waiting.
+// region: teardown-handler
+var td_waiter_task: local_task_id;
+var td_received: bool = false;
+var td_awaiting: bool = false;
+
+fn teardown_allreduce() void {
+    td_received = true;
+    if (td_awaiting) {
+        @activate(td_waiter_task);
+    }
+}
+// endregion
+
+////////////////////////////////////////////////////////////////////////////////
+// The three phases
+////////////////////////////////////////////////////////////////////////////////
+
+// Each phase configures the routes of the color, runs its DSD operations,
+// and then waits for the teardown wavelet unless it has already arrived.
+
+// region: row-reduce
+async fn row_reduce(n: u16) void {
+    rowReduce_configure();
+    setup_reduce_dsds(n);
+
+    td_received = false;
+    td_awaiting = false;
+
+    @await(reduce_dsd(width - 1, first_px, last_px));
+
+    if (!td_received) {
+        td_waiter_task = @current_task();
+        td_awaiting = true;
+        suspend;
+    }
+}
+
+// endregion
+async fn col_reduce(n: u16) void {
+    colReduce_configure();
+    setup_reduce_dsds(n);
+
+    td_received = false;
+    td_awaiting = false;
+
+    @await(reduce_dsd(height - 1, first_py, last_py));
+
+    if (!td_received) {
+        td_waiter_task = @current_task();
+        td_awaiting = true;
+        suspend;
+        td_awaiting = false;
+    }
+}
+
+async fn broadcast(n: u16) void {
+    bcast_configure();
+    setup_broadcast_dsds(n);
+
+    td_received = false;
+    td_awaiting = false;
+
+    @await(broadcast_dsd());
+
+    if (!td_received) {
+        td_waiter_task = @current_task();
+        td_awaiting = true;
+        suspend;
+        td_awaiting = false;
+    }
+}
+
+fn setup_reduce_dsds(n: u16) void {
+    mem_ctrl_buf_dsd = @set_dsd_base_addr(mem_ctrl_buf_dsd, ctrl_11);
+    mem_x_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, x);
+    mem_x_buf_dsd = @set_dsd_length(mem_x_buf_dsd, n);
+    fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, n);
+    fab_trans_x_wdsd = @set_dsd_length(fab_trans_x_wdsd, n);
+}
+
+fn setup_broadcast_dsds(n: u16) void {
+    mem_x_buf_dsd = @set_dsd_base_addr(mem_x_buf_dsd, x);
+    mem_x_buf_dsd = @set_dsd_length(mem_x_buf_dsd, n);
+    fab_recv_wdsd = @set_dsd_length(fab_recv_wdsd, n);
+    fab_trans_x_wdsd = @set_dsd_length(fab_trans_x_wdsd, n);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// The DSD operations of a phase
+////////////////////////////////////////////////////////////////////////////////
+
+// A reduction along a row or column. The last PE receives the vector of
+// each other PE in turn and accumulates it into x. Every other PE sends x,
+// then a control wavelet that advances the switch of its neighbor so that
+// the neighbor receives from the next PE. The first PE finally sends the
+// teardown wavelet, which ends the phase on all PEs.
+//
+// Every asynchronous operation activates @current_task() when it completes,
+// and the function suspends until then.
+async fn reduce_dsd(num_reduce_pes: i16, comptime is_first_pe: bool, comptime is_last_pe: bool) void {
+    if (is_last_pe) {
+        var i: i16 = 0;
+        while (i < num_reduce_pes) : (i += 1) {
+            @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .activate=@current_task()});
+            @load_to_dsr(src0_dsr, mem_x_buf_dsd);
+            @load_to_dsr(dest_dsr, mem_x_buf_dsd);
+            if (TYPE_BINARY_OP.ADD == functor) {
+                @fadds(dest_dsr, src0_dsr, src1_dsr, .{.async=true});
+            } else {
+                @fmaxs(dest_dsr, src0_dsr, src1_dsr, .{.async=true});
+            }
+            suspend;
+        }
+    } else {
+        // The send stalls until the switch of the neighbor has advanced to
+        // this PE.
+        @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=@current_task()});
+        @load_to_dsr(src1_dsr, mem_x_buf_dsd);
+        @mov32(dest_dsr, src1_dsr, .{.async=true});
+        suspend;
+        // Advance the switch of the neighbor.
+        @load_to_dsr(dest_dsr, fab_trans_ctrl_wdsd, .{.async=true, .activate=@current_task()});
+        @load_to_dsr(src1_dsr, mem_ctrl_buf_dsd);
+        @mov32(dest_dsr, src1_dsr, .{.async=true});
+        suspend;
+        if (is_first_pe) {
+            @load_to_dsr(dest_dsr, fab_trans_ctrl_wdsd, .{.async=true});
+            @load_to_dsr(src1_dsr, mem_buf_td_dsd);
+            @mov32(dest_dsr, src1_dsr, .{.async=true});
+        }
+    }
+}
+
+// The broadcast. The bottom-right PE sends x, then the teardown wavelet;
+// every other PE receives x.
+async fn broadcast_dsd() void {
+    if (last_px and last_py) {
+        @load_to_dsr(dest_dsr, fab_trans_x_wdsd, .{.async=true, .activate=@current_task()});
+        @load_to_dsr(src1_dsr, mem_x_buf_dsd);
+        @mov32(dest_dsr, src1_dsr, .{.async=true});
+        suspend;
+        @load_to_dsr(dest_dsr, fab_trans_ctrl_wdsd, .{.async=true});
+        @load_to_dsr(src1_dsr, mem_buf_td_dsd);
+        @mov32(dest_dsr, src1_dsr, .{.async=true});
+    } else {
+        @load_to_dsr(dest_dsr, mem_x_buf_dsd);
+        @load_to_dsr(src1_dsr, fab_recv_wdsd, .{.async=true, .activate=@current_task()});
+        @mov32(dest_dsr, src1_dsr, .{.async=true});
+        suspend;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Scaling for the norm
+////////////////////////////////////////////////////////////////////////////////
+
+// Sets alpha to the power of two 2^floor(log2(|x|)) and inv_alpha to its
+// inverse. Dividing by alpha only changes the exponent, so it is exact,
+// and the scaled value is of order one. A division would cost about 50
+// cycles; this takes about 11 instructions.
+//
+// With x = sign * 2^(E-127) * mantissa:
+//   normal numbers (0 < E < 255):   alpha = 2^(E-127)
+//   subnormal numbers (E = 0):      alpha = 2^-126
+//   zero:                           alpha = 1
+//   infinity and NaN (E = 255):     alpha = 1
+//
+// Examples: x = 14.0 gives alpha = 8, inv_alpha = 0.125;
+// x = 0.15625 gives alpha = 0.125, inv_alpha = 8.
+fn approx(x_val: f32, out_alpha: *f32, out_inv_alpha: *f32) void {
+   const MASK_EXPONENT: u32 = 0x7F800000;
+   const MASK_MANTISSA: u32 = 0x007FFFFF;
+   const x_u32: u32 = @bitcast(u32, x_val);
+   const exp: u32 = (x_u32 & MASK_EXPONENT);
+   const mantissa: u32 = (x_u32) & MASK_MANTISSA;
+   var E: u16 = @as(u16, (exp >> 23));
+
+   if (0 == E) {
+        if (0 == mantissa) {
+            E = 127; // x = 0
+        } else {
+            E = 1;   // subnormal
+        }
+    }
+    if (255 == E) {
+        E = 127; // infinity or NaN
+    }
+
+    var alpha_u32: u32 = (@as(u32, E) << 23);
+    var inv_alpha_u32: u32 = @as(u32, (254 - E)) << 23;
+
+    out_alpha.* = @bitcast(f32, alpha_u32);
+    out_inv_alpha.* = @bitcast(f32, inv_alpha_u32);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Routes
+////////////////////////////////////////////////////////////////////////////////
+
+// The routes of C_ROUTE are rewritten before each phase, and the teardown
+// at the end of the phase returns the color to the state in which the
+// next configuration can be applied.
+
+const tile_config = @import_module("<tile_config>");
+const color_config = tile_config.color_config;
+const switch_config = tile_config.switch_config;
+
+// Row reduction: every PE sends east; the last PE of the row receives from
+// the west, and its switch is advanced by each sender in turn.
+fn rowReduce_configure() void {
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (first_px) {
+        color_config.reset_routes(addr, .{.tx = EAST, .rx = RAMP});
+    } else if (last_px) {
+        color_config.reset_routes(addr, .{.tx = RAMP, .rx = WEST});
+    } else {
+        color_config.reset_routes(addr, .{.tx = EAST, .rx = WEST});
+    }
+
+    switch_config.clear_current_position(C_ROUTE);
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+
+    if (!last_px) {
+        switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
+    }
+
+    tile_config.teardown.exit(C_ROUTE);
+}
+
+// Column reduction: the same along the column, towards the south.
+fn colReduce_configure() void {
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (first_py) {
+        color_config.reset_routes(addr, .{.tx = SOUTH, .rx = RAMP});
+    } else if (last_py) {
+        color_config.reset_routes(addr, .{.tx = RAMP, .rx = NORTH});
+    } else {
+        color_config.reset_routes(addr, .{.tx = SOUTH, .rx = NORTH});
+    }
+
+    switch_config.clear_current_position(C_ROUTE);
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+
+    if (!last_py) {
+        switch_config.set_rx_switch_pos1(C_ROUTE, RAMP);
+    }
+
+    tile_config.teardown.exit(C_ROUTE);
+}
+
+// Broadcast: from the bottom-right PE north along the last column, and
+// from each PE of that column west along its row.
+fn bcast_configure() void {
+    const addr = color_config.get_color_config_addr(C_ROUTE);
+
+    if (last_px) {
+        if (last_py) {
+            color_config.reset_routes(addr, .{.tx = [2]direction{WEST, NORTH}, .rx = RAMP});
+        } else {
+            if (first_py) {
+                color_config.reset_routes(addr, .{.tx = [2]direction{WEST, RAMP}, .rx = SOUTH});
+            } else {
+                color_config.reset_routes(addr, .{.tx = [3]direction{WEST, RAMP, NORTH}, .rx = SOUTH});
+            }
+        }
+    } else {
+        if (first_px) {
+            color_config.reset_routes(addr, .{.tx = RAMP, .rx = EAST});
+        } else {
+            color_config.reset_routes(addr, .{.tx = [2]direction{WEST, RAMP}, .rx = EAST});
+        }
+    }
+
+    switch_config.clear_current_position(C_ROUTE);
+    switch_config.set_invalid_for_all_switch_positions(C_ROUTE);
+    tile_config.teardown.exit(C_ROUTE);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Compile-time configuration
+////////////////////////////////////////////////////////////////////////////////
+
+comptime {
+    @set_teardown_handler(teardown_allreduce, C_ROUTE);
+}
+
+// The initial route configuration. It is replaced at runtime before each
+// phase; the switch and teardown settings are what the phases rely on.
+comptime {
+    const universalConfig = .{
+        .routes= .{
+            .rx = .{ WEST },
+            .tx = .{ EAST },
+        },
+        .switches=.{
+            .pos1 = .{ .rx = RAMP },
+            .ring_mode = true,
+            .pop_mode = .{ .pop_on_advance = true },
+        },
+        .teardown = true
+    };
+
+    @comptime_assert(1 < width);
+    @set_local_color_config(C_ROUTE, universalConfig);
+}
+
+comptime {
+    @initialize_queue(iq_route, .{.color = C_ROUTE} );
+}
+
+comptime {
+    if (@is_arch("wse3")) {
+        @initialize_queue(oq_route, .{.color = C_ROUTE });
+    }
+}

@@ -1,0 +1,117 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Variable with align
+// =============================================================================
+
+// CHECK: var a: i32 align(16) = @as(i32, 0);
+var a: i32 align(16) = 0;
+
+// CHECK: export fn use_a() i32 {
+export fn use_a() i32 { return a; }
+
+// -----
+
+// =============================================================================
+// Variable with linkname
+// =============================================================================
+
+// CHECK: var b: i32 linkname("B_buf") = @as(i32, 0);
+var b: i32 linkname("B_buf") = 0;
+
+// CHECK: export fn use_b() i32 {
+export fn use_b() i32 { return b; }
+
+// -----
+
+// =============================================================================
+// Variable with both align and linkname
+// =============================================================================
+
+// CHECK: var c: i32 linkname("C_buf") align(32) = @as(i32, 0);
+var c: i32 align(32) linkname("C_buf") = 0;
+
+// CHECK: export fn use_c() i32 {
+export fn use_c() i32 { return c; }
+
+// -----
+
+// =============================================================================
+// Align via comptime function call
+// =============================================================================
+
+fn get_alignment() u16 { return 16; }
+
+// CHECK: var d: i32 align(16) = @as(i32, 0);
+var d: i32 align(get_alignment()) = 0;
+
+// CHECK: export fn use_d() i32 {
+export fn use_d() i32 { return d; }
+
+// -----
+
+// =============================================================================
+// Linkname via comptime function call
+// =============================================================================
+
+fn get_var_linkname() comptime_string { return "E_buf"; }
+
+// CHECK: var e: i32 linkname("E_buf") = @as(i32, 0);
+var e: i32 linkname(get_var_linkname()) = 0;
+
+// CHECK: export fn use_e() i32 {
+export fn use_e() i32 { return e; }
+
+// -----
+
+// =============================================================================
+// Function with linkname (literal)
+// =============================================================================
+
+// CHECK: export fn f() linkname("f_impl") i32 {
+// CHECK:     return @as(i32, 0);
+// CHECK: }
+export fn f() linkname("f_impl") i32 { return 0; }
+
+// -----
+
+// =============================================================================
+// Function with linkname via comptime function call
+// =============================================================================
+
+fn get_fn_linkname() comptime_string { return "g_impl"; }
+
+// CHECK: export fn g() linkname("g_impl") i32 {
+// CHECK:     return @as(i32, 0);
+// CHECK: }
+export fn g() linkname(get_fn_linkname()) i32 { return 0; }
+
+// -----
+
+// =============================================================================
+// Param with default value
+// =============================================================================
+
+param WIDTH : i32 = 10;
+
+// CHECK: export fn use_param() i32 {
+// CHECK:     return @as(i32, 10);
+// CHECK: }
+export fn use_param() i32 { return WIDTH; }
+
+// -----
+
+// =============================================================================
+// Comptime block with trailing semicolon
+// =============================================================================
+
+param VAL : i32 = 42;
+
+comptime {
+    @comptime_assert(VAL == 42);
+};
+
+// CHECK: export fn use_ct() i32 {
+// CHECK:     return @as(i32, 42);
+// CHECK: }
+export fn use_ct() i32 { return VAL; }

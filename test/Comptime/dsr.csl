@@ -1,0 +1,107 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// @get_dsr - Create DSR from type and integer ID
+// =============================================================================
+
+comptime {
+  // Basic DSR creation
+  const dsr1 = @get_dsr(dsr_dest, 0);
+  const dsr2 = @get_dsr(dsr_src0, 1);
+  const dsr3 = @get_dsr(dsr_src1, 2);
+
+  // Type introspection
+  // expected-remark @+1 {{dsr_dest}}
+  @comptime_print(@type_of(dsr1));
+  // expected-remark @+1 {{dsr_src0}}
+  @comptime_print(@type_of(dsr2));
+  // expected-remark @+1 {{dsr_src1}}
+  @comptime_print(@type_of(dsr3));
+
+  // Value printing
+  // expected-remark @+1 {{@get_dsr(dsr_dest, 0)}}
+  @comptime_print(dsr1);
+  // expected-remark @+1 {{@get_dsr(dsr_src0, 1)}}
+  @comptime_print(dsr2);
+  // expected-remark @+1 {{@get_dsr(dsr_src1, 2)}}
+  @comptime_print(dsr3);
+}
+
+// -----
+
+// =============================================================================
+// @get_dsr - FIFO DSR conversion
+// =============================================================================
+
+comptime {
+  const dest_dsr = @get_dsr(dsr_dest, 4);
+  const src1_dsr = @get_dsr(dsr_src1, 5);
+
+  // Convert to FIFO variants
+  const fifo_dest = @get_dsr(dsr_fifo_dest, dest_dsr);
+  const fifo_src1 = @get_dsr(dsr_fifo_src1, src1_dsr);
+
+  // expected-remark @+1 {{dsr_fifo_dest}}
+  @comptime_print(@type_of(fifo_dest));
+  // expected-remark @+1 {{dsr_fifo_src1}}
+  @comptime_print(@type_of(fifo_src1));
+
+  // Value printing - should preserve ID
+  // expected-remark @+1 {{@get_dsr(dsr_fifo_dest, 4)}}
+  @comptime_print(fifo_dest);
+  // expected-remark @+1 {{@get_dsr(dsr_fifo_src1, 5)}}
+  @comptime_print(fifo_src1);
+}
+
+// -----
+
+// =============================================================================
+// @get_xdsr - Create XDSR identifier
+// =============================================================================
+
+comptime {
+  const xdsr_val = @get_xdsr(0);
+  const xdsr_val2 = @get_xdsr(3);
+
+  // expected-remark @+1 {{xdsr}}
+  @comptime_print(@type_of(xdsr_val));
+  // expected-remark @+1 {{@get_xdsr(0)}}
+  @comptime_print(xdsr_val);
+  // expected-remark @+1 {{@get_xdsr(3)}}
+  @comptime_print(xdsr_val2);
+}
+
+// -----
+
+// =============================================================================
+// @get_dsr - Error case: invalid DSR type
+// =============================================================================
+
+comptime {
+  // expected-error @+1 {{first argument must be a DSR type}}
+  const bad = @get_dsr(i32, 0);
+}
+
+// -----
+
+// =============================================================================
+// @get_dsr - Error case: wrong base type for FIFO conversion
+// =============================================================================
+
+comptime {
+  const src0_dsr = @get_dsr(dsr_src0, 0);
+  // expected-error @+1 {{@get_dsr(dsr_fifo_dest, ...) requires dsr_dest argument}}
+  const bad = @get_dsr(dsr_fifo_dest, src0_dsr);
+}
+
+// -----
+
+// =============================================================================
+// @get_dsr - Error case: wrong base type for FIFO src1 conversion
+// =============================================================================
+
+comptime {
+  const dest_dsr = @get_dsr(dsr_dest, 0);
+  // expected-error @+1 {{@get_dsr(dsr_fifo_src1, ...) requires dsr_src1 argument}}
+  const bad = @get_dsr(dsr_fifo_src1, dest_dsr);
+}

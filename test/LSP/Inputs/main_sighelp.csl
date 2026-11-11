@@ -1,0 +1,10 @@
+const mod = @import_module("module_a.csl");
+
+fn local_fn(x: u32, y: u32) u32 {
+    return x + y;
+}
+
+fn entry() void {
+    const a = local_fn(1, 2);
+    const b = mod.add(1, 2);
+}

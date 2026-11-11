@@ -1,0 +1,27 @@
+// RUN: csl-s2s %s --count-tasks=false | FileCheck %s
+//
+// A worker receives the arguments of its callee in r2-r5, loaded from
+// arg-area slots 0-3. Like cslc, a 32-bit argument takes the first free
+// even-aligned register pair, and a 16-bit argument the first free
+// register, including one that the alignment skipped. Slot 4 holds the
+// return address (r15).
+
+const STATE: local_task_id = @get_local_task_id(1);
+var out: i32 = 0;
+
+async fn nop() void {}
+async fn w(x: i16, y: i32, z: i16) void { out = @as(i32, x + z) + y; }
+
+// CHECK-LABEL: fn root() void {
+// CHECK:         [[AREA:__csl_tmp[0-9]+]][@as(u16, 0)] = @as(u16, 5);
+// CHECK-NEXT:    const [[AREA32:__csl_tmp[0-9]+]] = @ptrcast([*]i32, [[AREA]]);
+// CHECK-NEXT:    [[AREA32]][@as(u16, 1)] = @as(i32, 7);
+// CHECK-NEXT:    [[AREA]][@as(u16, 1)] = @as(u16, 9);
+// CHECK-NEXT:    [[AREA]][@as(u16, 4)] =
+async task root() void {
+  @await_parallel(nop(), w(5, 7, 9));
+}
+
+comptime { @bind_local_task(root, STATE); }
+fn fstart() void { @coro_runtime_init(); @activate(STATE); }
+comptime { @export_symbol(fstart); }

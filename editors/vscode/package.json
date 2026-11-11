@@ -1,0 +1,146 @@
+{
+  "name": "csl-lsp",
+  "displayName": "Language Server for CSL",
+  "description": "Language Server for Cerebras Software Language (CSL)",
+  "version": "0.0.0",
+  "publisher": "esa-tu-darmstadt",
+  "license": "Apache-2.0 WITH LLVM-exception",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/esa-tu-darmstadt/csl-pp",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/esa-tu-darmstadt/csl-pp/issues"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "csl.restartServer",
+        "title": "CSL: Restart Language Server"
+      }
+    ],
+    "languages": [
+      {
+        "id": "csl",
+        "aliases": [
+          "CSL",
+          "Cerebras Software Language"
+        ],
+        "extensions": [
+          ".csl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "csl",
+        "scopeName": "source.csl",
+        "path": "./syntaxes/csl.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "CSL",
+      "properties": {
+        "csl.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override path to the csl-lsp-server executable. Leave empty to use the bundled binary."
+        },
+        "csl.serverArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional arguments passed to csl-lsp-server."
+        },
+        "csl.arch": {
+          "type": "string",
+          "enum": [
+            "wse2",
+            "wse3"
+          ],
+          "default": "wse2",
+          "description": "Target architecture."
+        },
+        "csl.systemImportPath": {
+          "type": "string",
+          "default": "",
+          "description": "Search path for system module imports (angle bracket syntax like \"<memcpy/get_params>\"). When a .sif container is specified via csl.systemModuleSif, this path is used as the internal search path within the SIF container. Leave empty when specifying a SIF container to use the default internal search path (/cb/toolchains/cslang/*/*/csl-libs/)."
+        },
+        "csl.systemModuleSif": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a .sif container for system module resolution. When set, system modules are resolved from the SIF container and opened as read-only virtual documents."
+        },
+        "csl.rectangle": {
+          "type": "string",
+          "default": "100,100",
+          "description": "Rectangle size as width,height for @get_rectangle builtin."
+        },
+        "csl.fabricDims": {
+          "type": "string",
+          "default": "100,100",
+          "description": "Fabric dimensions as width,height for @get_rectangle builtin."
+        },
+        "csl.fabricOffsets": {
+          "type": "string",
+          "default": "3,3",
+          "description": "Fabric offset as x,y for @get_rectangle builtin."
+        },
+        "csl.params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          },
+          "default": {},
+          "description": "Parameter bindings passed to the LSP server. Keys are parameter names, values are numbers. Numbers containing '.' are comptime_float, otherwise comptime_int. Example: {\"DIM\": 2, \"Nz\": 4}."
+        },
+        "csl.filterOverlappingErrors": {
+          "type": "boolean",
+          "default": false,
+          "description": "When multiple error diagnostics overlap, show only the innermost (most specific) error."
+        },
+        "csl.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace communication between VS Code and the CSL language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run compile -- --watch",
+    "package": "vsce package --target",
+    "package:linux-x64": "vsce package --target linux-x64",
+    "package:linux-arm64": "vsce package --target linux-arm64",
+    "package:darwin-x64": "vsce package --target darwin-x64",
+    "package:darwin-arm64": "vsce package --target darwin-arm64"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.27.2",
+    "typescript": "^5.3.0"
+  }
+}

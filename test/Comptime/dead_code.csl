@@ -1,0 +1,134 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+//
+// Tests for making sure that dead code paths do not cause compilation errors.
+//
+// We use @comptime_assert(false) as the "error that should be ignored" since
+// it always fails but can be used as a value expression.
+
+// =============================================================================
+// CASE 1: SelectOp - dead else-branch (outer condition always true)
+// =============================================================================
+
+fn select_dead_else_branch() i32 {
+    const result: i32 =
+        if      (true) 1
+        else    @comptime_assert(false);  // Dead code - should not cause error
+    return result;
+}
+
+comptime {
+    @export_symbol(select_dead_else_branch);
+}
+
+// -----
+
+// =============================================================================
+// CASE 2: SelectOp - dead true-branch (outer condition always false)
+// =============================================================================
+
+fn select_dead_true_branch() i32 {
+    const result: i32 =
+        if      (false) @comptime_assert(false)  // Dead code
+        else            2;
+    return result;
+}
+
+comptime {
+    @export_symbol(select_dead_true_branch);
+}
+
+// -----
+
+// =============================================================================
+// CASE 3: Short-circuit OR - RHS never evaluated
+// =============================================================================
+// In `true or X`, X is never evaluated due to short-circuit.
+
+fn short_circuit_or() bool {
+    return true or @comptime_assert(false);  // RHS is dead code
+}
+
+comptime {
+    @export_symbol(short_circuit_or);
+}
+
+// -----
+
+// =============================================================================
+// CASE 4: Short-circuit AND - RHS never evaluated
+// =============================================================================
+// In `false and X`, X is never evaluated due to short-circuit.
+
+fn short_circuit_and() bool {
+    return false and @comptime_assert(false);  // RHS is dead code
+}
+
+comptime {
+    @export_symbol(short_circuit_and);
+}
+
+// -----
+
+// =============================================================================
+// CASE 5: Nested dead branches - multiple levels
+// =============================================================================
+
+fn nested_dead_branches() i32 {
+    const result: i32 =
+        if (true) 1
+        else if (true) @comptime_assert(false)         // Dead: outer is true
+        else if (false) @comptime_assert(false)        // Dead: outer is true
+        else @comptime_assert(false);                  // Dead: outer is true
+    return result;
+}
+
+comptime {
+    @export_symbol(nested_dead_branches);
+}
+
+// -----
+
+// =============================================================================
+// CASE 6: Dead code in comptime if-statement
+// =============================================================================
+
+comptime {
+    if (false) {
+        // This block is dead code - errors here shouldn't matter
+        @comptime_assert(false);
+    }
+}
+
+// -----
+
+// =============================================================================
+// CASE 7: Chained short-circuit with multiple dead ops
+// =============================================================================
+
+fn chained_short_circuit() bool {
+    // After `true or`, everything else is dead
+    return true or @comptime_assert(false) or @comptime_assert(false);
+}
+
+comptime {
+    @export_symbol(chained_short_circuit);
+}
+
+// -----
+
+// =============================================================================
+// CASE 8: Dead code in else-if chain
+// =============================================================================
+
+fn else_if_chain_dead() i32 {
+    const result: i32 =
+        if      (false) 1
+        else if (false) 2
+        else if (true)  3                        // This branch is taken
+        else    @comptime_assert(false);         // Dead: previous branch taken
+    return result;
+}
+
+comptime {
+    @export_symbol(else_if_chain_dead);
+}

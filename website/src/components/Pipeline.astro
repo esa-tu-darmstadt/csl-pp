@@ -1,0 +1,139 @@
+---
+// The flow from csl++ source through csl-pp to cslc. Drawn as SVG so that it
+// scales instead of wrapping; on narrow screens it scrolls horizontally.
+---
+
+<figure class="pipeline" aria-label="csl-pp parses and comptime-evaluates csl++ source, transforms it and emits vanilla CSL, which cslc of the Cerebras SDK compiles. The frontend of csl-pp also drives the language server.">
+  <svg viewBox="0 0 1080 150" role="img">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="arrowhead" />
+      </marker>
+    </defs>
+
+    <g class="box cslpp">
+      <rect x="0" y="40" width="140" height="56" rx="8" />
+      <text x="70" y="64" class="name">csl++ source</text>
+      <text x="70" y="82" class="detail">layout, PE programs</text>
+    </g>
+
+    <g class="group">
+      <rect x="185" y="14" width="550" height="98" rx="10" />
+      <text x="197" y="31" class="group-label">csl-pp</text>
+    </g>
+
+    <g class="box cslpp">
+      <rect x="200" y="40" width="200" height="56" rx="8" />
+      <text x="300" y="64" class="name">Parse, comptime-evaluate</text>
+      <text x="300" y="82" class="detail">types, generics, tile parameters</text>
+    </g>
+
+    <g class="box cslpp">
+      <rect x="420" y="40" width="170" height="56" rx="8" />
+      <text x="505" y="64" class="name">Transform</text>
+      <text x="505" y="82" class="detail">async lowering, claims, …</text>
+    </g>
+
+    <g class="box cslpp">
+      <rect x="610" y="40" width="110" height="56" rx="8" />
+      <text x="665" y="64" class="name">Emit</text>
+      <text x="665" y="82" class="detail">CSL text</text>
+    </g>
+
+    <g class="box csl">
+      <rect x="780" y="40" width="130" height="56" rx="8" />
+      <text x="845" y="64" class="name">Vanilla CSL</text>
+      <text x="845" y="82" class="detail">readable, per tile</text>
+    </g>
+
+    <g class="box csl external">
+      <rect x="960" y="40" width="110" height="56" rx="8" />
+      <text x="1015" y="64" class="name">cslc</text>
+      <text x="1015" y="82" class="detail">Cerebras SDK</text>
+    </g>
+
+    <g class="arrows">
+      <path d="M 140 68 H 183" />
+      <path d="M 400 68 H 418" />
+      <path d="M 590 68 H 608" />
+      <path d="M 735 68 H 778" />
+      <path d="M 910 68 H 958" />
+    </g>
+
+    <g class="note">
+      <path d="M 300 112 V 128" />
+      <text x="300" y="143">also drives the language server</text>
+    </g>
+  </svg>
+</figure>
+
+<style>
+  .pipeline {
+    margin-block: 1.5rem 2rem;
+    overflow-x: auto;
+  }
+  .pipeline svg {
+    display: block;
+    width: 100%;
+    min-width: 44rem;
+    height: auto;
+    font-family: var(--sl-font-system);
+  }
+  .box rect {
+    stroke-width: 1.5;
+  }
+  .box.cslpp rect {
+    fill: var(--cpp-orange-bg);
+    stroke: var(--cpp-orange);
+  }
+  .box.csl rect {
+    fill: var(--cpp-teal-bg);
+    stroke: var(--cpp-teal);
+  }
+  .box.external rect {
+    stroke-dasharray: 5 4;
+  }
+  .box text {
+    text-anchor: middle;
+    fill: var(--sl-color-white);
+  }
+  .name {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .detail {
+    font-size: 11px;
+    fill: var(--sl-color-gray-2) !important;
+  }
+  .group rect {
+    fill: none;
+    stroke: var(--cpp-orange);
+    stroke-width: 2;
+  }
+  .group-label {
+    font-family: var(--sl-font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--cpp-orange);
+  }
+  .arrows path {
+    fill: none;
+    stroke: var(--sl-color-gray-3);
+    stroke-width: 2;
+    marker-end: url(#arrow);
+  }
+  .arrowhead {
+    fill: var(--sl-color-gray-3);
+  }
+  .note path {
+    stroke: var(--sl-color-gray-3);
+    stroke-width: 1.5;
+    stroke-dasharray: 3 3;
+  }
+  .note text {
+    text-anchor: middle;
+    font-size: 11px;
+    font-style: italic;
+    fill: var(--sl-color-gray-2);
+  }
+</style>

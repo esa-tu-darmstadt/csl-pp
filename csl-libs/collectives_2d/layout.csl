@@ -1,0 +1,76 @@
+// collectives_2d: layout part.
+//
+// Import this module in the layout file and pass the result of
+// get_params(px, py) to the PE program of each PE. The PE program imports
+// the PE part (pe.csl) once per dimension it uses, with the x or y member
+// of the result:
+//
+//   const c2d = @import_module("collectives_2d/layout.csl");
+//   ...
+//   @set_tile_code(px, py, "pe.csl", .{
+//     .c2d_params = c2d.get_params(px, py),
+//     ...
+//   });
+//
+//   // In pe.csl:
+//   const mpi_x = @import_module("collectives_2d/pe.csl", .{ .dim_params = c2d_params.x });
+//   const mpi_y = @import_module("collectives_2d/pe.csl", .{ .dim_params = c2d_params.y });
+//
+// The module claims four colors, two per dimension. Each import of the
+// module is a separate instance with colors of its own.
+
+const X_DATA_COLOR_0: color = @claim_color();
+const X_DATA_COLOR_1: color = @claim_color();
+
+const Y_DATA_COLOR_0: color = @claim_color();
+const Y_DATA_COLOR_1: color = @claim_color();
+
+// Parameters of the PE part for one dimension.
+const DimParams = struct {
+    DATA_COLOR_0: color,
+    DATA_COLOR_1: color,
+    POS_DIR: direction,   // towards higher PE indices in this dimension
+    NEG_DIR: direction,
+    pe_min: bool,         // the PE is the first of this dimension
+    pe_max: bool,         // the PE is the last of this dimension
+    NUM_PES: u16,         // number of PEs in this dimension
+    DIM_ID: u16,          // 0 for x, 1 for y
+};
+
+const Params = struct {
+    x: DimParams,
+    y: DimParams,
+};
+
+// Returns the parameters of the PE part for the PE at (Px, Py).
+fn get_params(Px: u16, Py: u16) Params {
+    const width = @get_rectangle().width;
+    const height = @get_rectangle().height;
+
+    const x_dim_info = DimParams {
+        .DATA_COLOR_0 = X_DATA_COLOR_0,
+        .DATA_COLOR_1 = X_DATA_COLOR_1,
+        .POS_DIR = EAST,
+        .NEG_DIR = WEST,
+        .pe_min = (Px == 0),
+        .pe_max = (Px == (width - 1)),
+        .NUM_PES = width,
+        .DIM_ID = @as(u16, 0),
+    };
+
+    const y_dim_info = DimParams {
+        .DATA_COLOR_0 = Y_DATA_COLOR_0,
+        .DATA_COLOR_1 = Y_DATA_COLOR_1,
+        .POS_DIR = SOUTH,
+        .NEG_DIR = NORTH,
+        .pe_min = (Py == 0),
+        .pe_max = (Py == (height - 1)),
+        .NUM_PES = height,
+        .DIM_ID = @as(u16, 1),
+    };
+
+    return Params {
+        .x = x_dim_info,
+        .y = y_dim_info,
+    };
+}

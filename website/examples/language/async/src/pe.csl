@@ -1,0 +1,67 @@
+param memcpy_params;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+var result: [1]u32;
+var result_ptr: [*]u32 = &result;
+
+// region: async-fn
+// Suspends once, then returns x + 1.
+async fn next(x: u32) u32 {
+  @activate(@current_task());
+  suspend;
+  return x + 1;
+}
+// endregion
+
+// region: await
+async fn twice(x: u32) u32 {
+  const y = @await(next(x));
+  return @await(next(y));
+}
+// endregion
+
+// region: await-parallel
+async fn nothing() void {}
+
+async fn three_at_once() u32 {
+  // r is a tuple of the three results; r[1] is the void result of nothing().
+  const r = @await_parallel(next(1), nothing(), next(10));
+  return r[0] + r[2];
+}
+// endregion
+
+// region: count-free
+async fn spread(x: u32) u32 {
+  // Two of the three calls need a worker task.
+  if (@count_free(local_task_id) >= 2) {
+    const r = @await_parallel(next(x), next(x), next(x));
+    return r[0] + r[1] + r[2];
+  }
+  return 3 * @await(next(x));
+}
+// endregion
+
+// region: task
+const main_task_id: local_task_id = @claim_local_task();
+
+async task main_task() void {
+  result[0] = @await(twice(1)) + @await(three_at_once()) + @await(spread(5));
+  sys_mod.unblock_cmd_stream();
+}
+
+// Called by the host.
+fn compute() void {
+  @coro_runtime_init();
+  @activate(main_task_id);
+}
+
+comptime {
+  @bind_local_task(main_task, main_task_id);
+}
+// endregion
+
+comptime {
+  @export_symbol(result_ptr, "result");
+  @export_symbol(compute);
+}

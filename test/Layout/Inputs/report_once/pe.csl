@@ -1,0 +1,13 @@
+param limit: u16;
+
+var count: u16 = 0;
+
+fn step() void {
+  if (count < limit) {
+    cout += 1;
+  }
+}
+
+comptime {
+  @export_symbol(step);
+}

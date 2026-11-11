@@ -1,0 +1,16 @@
+// A module with parameters for testing @import_module with param bindings
+
+param FACTOR : i32;
+param OFFSET : i32;
+
+fn compute(x: i32) i32 {
+  return x * FACTOR + OFFSET;
+}
+
+fn get_factor() i32 {
+  return FACTOR;
+}
+
+fn get_offset() i32 {
+  return OFFSET;
+}

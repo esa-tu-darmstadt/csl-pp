@@ -1,0 +1,242 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Basic exported function with arithmetic
+// =============================================================================
+
+// CHECK: export fn add(param0: i32, param1: i32) i32 {
+// CHECK:     return param0 + param1;
+// CHECK: }
+export fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+// -----
+
+// =============================================================================
+// Function with local variables
+// =============================================================================
+
+// CHECK: export fn compute(param0: i32) i32 {
+// CHECK:     const doubled: i32 = param0 * @as(i32, 2);
+// CHECK:     const result: i32 = doubled + @as(i32, 10);
+// CHECK:     return result;
+// CHECK: }
+export fn compute(x: i32) i32 {
+    const doubled = x * 2;
+    const result = doubled + 10;
+    return result;
+}
+
+// -----
+
+// =============================================================================
+// Global variable used by exported function
+// =============================================================================
+
+// CHECK: var counter: i32 = @as(i32, 0);
+var counter: i32 = 0;
+
+// CHECK: export fn increment() void {
+// CHECK:     counter += @as(i32, 1);
+// CHECK: }
+export fn increment() void {
+    counter = counter + 1;
+}
+
+// -----
+
+// =============================================================================
+// Array with zeros builtin
+// =============================================================================
+
+// CHECK: var arr: [10]i32 = [10]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+var arr = @zeros([10]i32);
+
+// CHECK: export fn get_first() i32 {
+// CHECK:     return (arr)[@as(u16, 0)];
+// CHECK: }
+export fn get_first() i32 {
+    return arr[0];
+}
+
+// -----
+
+// =============================================================================
+// Conditional expression
+// =============================================================================
+
+// CHECK: export fn max(param0: i32, param1: i32) i32 {
+export fn max(a: i32, b: i32) i32 {
+    // CHECK: if (param0 > param1)
+    // CHECK:     return param0;
+    // CHECK: else
+    // CHECK:     return param1;
+    if (a > b) {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+// -----
+
+// =============================================================================
+// Array indexing with variable index (lvalue)
+// Tests that lvalue indices are correctly handled in index_access validation
+// =============================================================================
+
+// CHECK: var data: [32]i16;
+var data: [32]i16;
+
+// CHECK: var idx: u16 = @as(u16, 0);
+var idx: u16 = 0;
+
+// CHECK: export fn array_index_with_variable() i16 {
+// CHECK:     return (data)[idx];
+// CHECK: }
+export fn array_index_with_variable() i16 {
+    return data[idx];
+}
+
+// CHECK: export fn array_assign_with_variable(param0: i16) void {
+// CHECK:     (data)[idx] = param0;
+// CHECK: }
+export fn array_assign_with_variable(value: i16) void {
+    data[idx] = value;
+}
+
+// -----
+
+// =============================================================================
+// Many-item pointer indexing
+// Tests indexing into [*]T pointers
+// =============================================================================
+
+// CHECK: export fn ptr_index_read(param0: [*]i32, param1: u16) i32 {
+// CHECK:     return param0[param1];
+// CHECK: }
+export fn ptr_index_read(ptr: [*]i32, idx: u16) i32 {
+    return ptr[idx];
+}
+
+// CHECK: export fn ptr_index_write(param0: [*]i32, param1: u16, param2: i32) void {
+// CHECK:     param0[param1] = param2;
+// CHECK: }
+export fn ptr_index_write(ptr: [*]i32, idx: u16, val: i32) void {
+    ptr[idx] = val;
+}
+
+// -----
+
+// =============================================================================
+// Forward reference to global from function
+// =============================================================================
+
+const foo = someFunc();
+const bar: i32 = 10;
+
+fn someFunc() i32 {
+    return bar;
+}
+
+// CHECK: export fn use_foo() i32 {
+// CHECK:     return @as(i32, 10);
+// CHECK: }
+export fn use_foo() i32 {
+    return foo;
+}
+
+// -----
+
+// =============================================================================
+// Export and extern globals
+// =============================================================================
+
+// CHECK: export var x: i16 = @as(i16, 12);
+export var x: i16 = 12;
+
+// CHECK: extern var y: i16;
+extern var y: i16;
+
+// CHECK: export fn use_globals() i16 {
+// CHECK:     return x + y;
+// CHECK: }
+export fn use_globals() i16 {
+    return x + y;
+}
+
+// -----
+
+// =============================================================================
+// Lazy evaluation: unreferenced global is not evaluated (no error)
+// =============================================================================
+
+var unused_global: i32 = 42;
+
+// CHECK: export fn lazy_test() i32 {
+// CHECK:     return @as(i32, 1);
+// CHECK: }
+export fn lazy_test() i32 {
+    return 1;
+}
+
+// -----
+
+// =============================================================================
+// Comptime var inside a generic function body
+// The comptime var should be evaluated and eliminated during comptime eval.
+// =============================================================================
+
+fn identity(comptime T: type, x: T) T {
+    comptime var uint = T;
+    return @bitcast(uint, @bitcast(uint, x));
+}
+
+// CHECK: fn identity(param0: u32) u32 {
+// CHECK:     return @bitcast(u32, @bitcast(u32, param0));
+// CHECK: }
+// CHECK: export fn use_identity() u32 {
+// CHECK:     return identity(@as(u32, 42));
+// CHECK: }
+export fn use_identity() u32 {
+    return identity(u32, @as(u32, 42));
+}
+
+// -----
+
+// =============================================================================
+// Address of array element in global
+// Tests that &global_array[i] is not collapsed to &global_array
+// =============================================================================
+
+// CHECK: var result: [2]i16 = [2]i16{0, 0};
+var result: [2]i16 = [2]i16{0, 0};
+
+// CHECK: fn write_result(param0: *i16) void {
+// CHECK:     param0.* = @as(i16, 42);
+// CHECK: }
+fn write_result(ptr: *i16) void {
+    ptr.* = 42;
+}
+
+// CHECK: export fn test_addr_of_element() void {
+// CHECK:     write_result(&(result)[@as(u16, 1)]);
+// CHECK: }
+export fn test_addr_of_element() void {
+    write_result(&result[1]);
+}
+
+// -----
+
+// =============================================================================
+// Array literal construction from runtime values
+// =============================================================================
+
+// CHECK: export fn array_from_args([[a:.*]]: u16, [[b:.*]]: u16) void {
+// CHECK:     pair = [2]u16{ [[a]], [[b]] };
+// CHECK: }
+var pair: [2]u16;
+export fn array_from_args(a: u16, b: u16) void {
+    pair = [2]u16{a, b};
+}

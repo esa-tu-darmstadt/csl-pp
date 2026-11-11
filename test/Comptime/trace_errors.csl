@@ -1,0 +1,100 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --trace-errors
+
+// =============================================================================
+// Runtime call chain: outer -> inner, error in inner
+// =============================================================================
+
+fn inner() void {
+  // expected-error @+1 {{assertion failed}}
+  @comptime_assert(false);
+}
+
+// expected-note @+1 {{in exported function 'outer'}}
+export fn outer() void {
+  // expected-note @+1 {{in runtime call to 'inner'}}
+  inner();
+}
+
+// -----
+
+// =============================================================================
+// Deep runtime call chain: top -> middle -> deep
+// =============================================================================
+
+fn deep() void {
+  // expected-error @+1 {{assertion failed}}
+  @comptime_assert(false);
+}
+
+fn middle() void {
+  // expected-note @+1 {{in runtime call to 'deep'}}
+  deep();
+}
+
+// expected-note @+1 {{in exported function 'top'}}
+export fn top() void {
+  // expected-note @+1 {{in runtime call to 'middle'}}
+  middle();
+}
+
+// -----
+
+// =============================================================================
+// Comptime call chain: error inside comptime-called function
+// =============================================================================
+
+fn bad_ct(comptime x: u32) u32 {
+  // expected-error @+1 {{assertion failed}}
+  @comptime_assert(false);
+  return x;
+}
+
+comptime {
+  // expected-note @+1 {{in comptime call to 'bad_ct'}}
+  const y = bad_ct(1);
+}
+
+// -----
+
+// =============================================================================
+// Export function with direct error
+// =============================================================================
+
+// expected-note @+1 {{in exported function 'bad_export'}}
+export fn bad_export() void {
+  // expected-error @+1 {{assertion failed}}
+  @comptime_assert(false);
+}
+
+// -----
+
+// =============================================================================
+// @export_symbol triggers instantiateFuncRef path
+// =============================================================================
+
+fn bad_sym() void {
+  // expected-error @+1 {{assertion failed}}
+  @comptime_assert(false);
+}
+
+comptime {
+  // expected-note @+1 {{in reference to 'bad_sym'}}
+  @export_symbol(bad_sym, "bad_sym");
+}
+
+// -----
+
+// =============================================================================
+// A function address reaching the runtime program triggers instantiation
+// after the analysis of the referencing function
+// =============================================================================
+
+fn bad_addr() void {
+  // expected-error @+1 {{assertion failed}}
+  @comptime_assert(false);
+}
+
+export fn test_addr_of() void {
+  // expected-note @+1 {{in reference to 'bad_addr'}}
+  var fptr: *const fn() void = &bad_addr;
+}

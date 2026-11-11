@@ -1,0 +1,20 @@
+// Layout for coroutine smoke test: single PE.
+
+const memcpy = @import_module("<memcpy/get_params>", .{ .width = 1, .height = 1 });
+
+// Root coroutine task uses 10, workers use 11 and 12, and the register
+// clobber test uses 13.
+const STATE: local_task_id = @get_local_task_id(10);
+const CLOBBER: local_task_id = @get_local_task_id(13);
+
+layout {
+    @set_rectangle(1, 1);
+
+    @set_tile_code(0, 0, "pe.csl", .{
+        .memcpy_params = memcpy.get_params(0),
+        .STATE = STATE,
+        .CLOBBER = CLOBBER,
+    });
+
+    @export_name("f_start", fn()void);
+}

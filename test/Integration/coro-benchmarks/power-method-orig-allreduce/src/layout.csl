@@ -1,0 +1,66 @@
+
+// Hybrid: coroutine stencil + original (callback-based) allreduce.
+// All task IDs / colors are claimed inside the libs.
+
+param MAX_ZDIM: i16 = 5;
+param width: i16 = 5;
+param height: i16 = 5;
+param BLOCK_SIZE: i16 = 2;
+
+const stencil = @import_module( "../../csl-libs/stencil_3d_7pts/layout.csl", .{
+    .width = width,
+    .height = height
+    });
+
+const reduce = @import_module( "../../benchmark-libs-orig/allreduce/layout.csl", .{
+    .width = width,
+    .height = height
+    });
+
+const memcpy = @import_module( "<memcpy/get_params>", .{
+    .width = width,
+    .height = height,
+    });
+
+layout{
+
+    @set_rectangle( width, height );
+
+    var py: i16 = 0;
+    while(py < height) : (py +=1) {
+        var px: i16 = 0;
+        while(px < width) : (px +=1) {
+
+            const memcpyParams = memcpy.get_params(px);
+            const stencilParams = stencil.get_params(px, py);
+            const reduceParams = reduce.get_params(px, py);
+            const params = .{
+                .memcpyParams = memcpyParams,
+                .reduceParams = reduceParams,
+                .MAX_ZDIM = MAX_ZDIM,
+                .BLOCK_SIZE = BLOCK_SIZE,
+                .stencilParams = stencilParams
+            };
+
+            @set_tile_code(px, py, "kernel_power_coro.csl", params);
+        }
+    }
+
+    @export_name("x", [*]f32, true);
+    @export_name("y", [*]f32, true);
+    @export_name("stencil_coeff", [*]f32, true);
+    @export_name("time_buf_u16", [*]u16, true);
+    @export_name("time_ref", [*]u16, true);
+
+    @export_name("f_enable_timer", fn()void);
+    @export_name("f_tic", fn()void);
+    @export_name("f_toc", fn()void);
+    @export_name("f_memcpy_timestamps", fn()void);
+
+    @export_name("f_sync", fn()void);
+    @export_name("f_power", fn(i16,i16)void);
+
+    @export_name("f_reference_timestamps", fn()void);
+
+    @export_name("f_init", fn()void);
+}

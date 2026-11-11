@@ -1,0 +1,17 @@
+// RUN: csl-s2s %s -verify-diagnostics --count-tasks=false --coro-mode=trampoline
+//
+// The stackless lowering does not support the results of @await_parallel.
+
+const STATE: local_task_id = @get_local_task_id(1);
+var out: i32 = 0;
+
+async fn a() void {}
+async fn b(x: i16) i32 { return @as(i32, x) * 2; }
+
+async task root() void {
+  // expected-error @+1 {{the results of @await_parallel are not supported with --coro-mode=trampoline; use the default --coro-mode, or let the callees write their results through pointers}}
+  const r = @await_parallel(a(), b(2));
+  out = r[1];
+}
+
+comptime { @bind_local_task(root, STATE); }

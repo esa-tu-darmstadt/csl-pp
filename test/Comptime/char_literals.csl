@@ -1,0 +1,89 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic character literals
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{97}}
+  @comptime_print('a');
+
+  // expected-remark @+1 {{65}}
+  @comptime_print('A');
+
+  // expected-remark @+1 {{48}}
+  @comptime_print('0');
+
+  // expected-remark @+1 {{32}}
+  @comptime_print(' ');
+}
+
+// -----
+
+// =============================================================================
+// Escape sequences
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{10}}
+  @comptime_print('\n');
+
+  // expected-remark @+1 {{9}}
+  @comptime_print('\t');
+
+  // expected-remark @+1 {{13}}
+  @comptime_print('\r');
+
+  // expected-remark @+1 {{92}}
+  @comptime_print('\\');
+
+  // expected-remark @+1 {{39}}
+  @comptime_print('\'');
+
+  // expected-remark @+1 {{34}}
+  @comptime_print('\"');
+}
+
+// -----
+
+// =============================================================================
+// Hex escape sequences
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{10}}
+  @comptime_print('\x0a');
+
+  // expected-remark @+1 {{65}}
+  @comptime_print('\x41');
+
+  // expected-remark @+1 {{255}}
+  @comptime_print('\xff');
+
+  // expected-remark @+1 {{0}}
+  @comptime_print('\x00');
+}
+
+// -----
+
+// =============================================================================
+// Char literals in arithmetic
+// =============================================================================
+
+comptime {
+  // expected-remark @+1 {{1}}
+  @comptime_print('b' - 'a');
+
+  // expected-remark @+1 {{25}}
+  @comptime_print('z' - 'a');
+}
+
+// -----
+
+// =============================================================================
+// Char literals in comparisons (used as comptime_int)
+// =============================================================================
+
+export fn test_char_compare(x: u8) bool {
+    return x == 'a';
+}

@@ -1,0 +1,86 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false \
+// RUN:   | FileCheck %s
+//
+// Constructs that Cerebras' cslc compiler rejects are reported by the
+// transpiler at the source location, so cslc never reports an error on the
+// transpiled program.
+
+// A tuple literal coerces to a tuple type, and an array literal may contain
+// tuple literals. cslc accepts such an array if it is not comptime-known.
+
+const P2 = @type_of(.{ @as(i32, 0), @as(i16, 0) });
+var x: i32 = 0;
+
+// CHECK-LABEL: export fn f() i32 {
+// CHECK-NEXT:    var p: @type_of(.{ @as(i32, 0), @as(i16, 0) }) = .{ 1, 2 };
+// CHECK-NEXT:    var a: [2]@type_of(.{ @as(i32, 0), @as(i16, 0) }) = [2]@type_of(.{ @as(i32, 0), @as(i16, 0) }){ .{ x, @as(i16, 2) }, .{ 3, 4 } };
+export fn f() i32 {
+  var p: P2 = .{ 1, 2 };
+  var a = [2]P2 { .{ x, 2 }, .{ 3, 4 } };
+  return p[0] + a[1][0];
+}
+
+// -----
+
+const P2 = @type_of(.{ @as(i32, 0), @as(i16, 0) });
+
+export fn f() i32 {
+  // expected-error @+1 {{Cerebras' cslc compiler does not support arrays of structs that are known at compile time; assign the elements at runtime instead}}
+  var a = [2]P2 { .{ 1, 2 }, .{ 3, 4 } };
+  return a[1][0];
+}
+
+// -----
+
+const P2 = @type_of(.{ @as(i32, 0), @as(i16, 0) });
+const W = struct { items: [2]P2, n: i32 };
+
+export fn f() i32 {
+  // expected-error @+1 {{Cerebras' cslc compiler does not support arrays of structs that are known at compile time; assign the elements at runtime instead}}
+  var w = W { .items = [2]P2 { .{ 1, 2 }, .{ 3, 4 } }, .n = 3 };
+  return w.n;
+}
+
+// -----
+
+const P2 = @type_of(.{ @as(i32, 0), @as(i16, 0) });
+
+// expected-error @+1 {{global 'arr' cannot be initialized with an array of structs, because Cerebras' cslc compiler does not support arrays of structs that are known at compile time; remove the initializer and assign the elements at runtime}}
+var arr = [2]P2 { .{ 1, 2 }, .{ 3, 4 } };
+
+export fn f() i32 {
+  return arr[0][0];
+}
+
+// -----
+
+var arr: [2]i32;
+
+// expected-error @+1 {{parameter 1 of 'take' has type '[2]i32', but Cerebras' cslc compiler does not support arrays as parameters of runtime functions; pass a pointer to the array instead}}
+fn take(a: [2]i32) i32 {
+  return a[1];
+}
+
+export fn f() i32 {
+  return take(arr);
+}
+
+// -----
+
+var arr: [2]i32;
+
+// expected-error @+1 {{'mk' returns '[2]i32', but Cerebras' cslc compiler does not support arrays as results of runtime functions; write the array through a pointer parameter instead}}
+fn mk() [2]i32 {
+  return arr;
+}
+
+export fn f() i32 {
+  var b = mk();
+  return b[0];
+}
+
+// -----
+
+const Row = [5]i32;
+// expected-error @+1 {{Cerebras' cslc compiler does not support arrays of arrays (here of '[5]i32'); list all dimensions in one pair of brackets instead, e.g. '[4, 5]i32'}}
+var m: [5]Row;

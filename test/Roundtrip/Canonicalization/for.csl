@@ -1,0 +1,129 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file | FileCheck %s
+
+// =============================================================================
+// Single-iteration for loop: body inlined with element = start
+// =============================================================================
+
+// CHECK: export fn for_single_iter() i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     sum += @as(i32, 5);
+// CHECK:     return sum;
+// CHECK: }
+export fn for_single_iter() i32 {
+    var sum: i32 = 0;
+    for (@range(i32, 5, 6, 1)) |i| {
+        sum += i;
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// Single-iteration for loop with index: body inlined, index = 0
+// =============================================================================
+
+// CHECK: export fn for_single_iter_idx() i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     sum = @as(i32, 10);
+// CHECK:     return sum;
+// CHECK: }
+export fn for_single_iter_idx() i32 {
+    var sum: i32 = 0;
+    for (@range(i32, 10, 11, 1)) |elem, idx| {
+        sum = elem + @as(i32, idx);
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// Inline for loop with zero iterations (dead code removal)
+// =============================================================================
+
+// CHECK: export fn inline_zero_iterations() i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     return sum;
+// CHECK: }
+export fn inline_zero_iterations() i32 {
+    var sum: i32 = 0;
+    inline for (@range(i32, 0, 0, 1)) |i| {
+        sum += i;
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// Non-inline runtime for loop with zero iterations (dead code removal)
+// =============================================================================
+
+// CHECK: export fn runtime_zero_iterations() i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     return sum;
+// CHECK: }
+export fn runtime_zero_iterations() i32 {
+    var sum: i32 = 0;
+    for (@range(i32, 5, 5, 1)) |i| {
+        sum += i;
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// Single-iteration for loop with a nested break: not inlined, because the
+// break skips the rest of the body
+// =============================================================================
+
+// CHECK: export fn for_single_iter_nested_break(param0: bool) i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     for (@range(i32, 5, 6, 1)) |i| {
+// CHECK:         if (param0) {
+// CHECK:             break;
+// CHECK:         }
+// CHECK:         sum += i;
+// CHECK:     }
+// CHECK:     return sum;
+// CHECK: }
+export fn for_single_iter_nested_break(c: bool) i32 {
+    var sum: i32 = 0;
+    for (@range(i32, 5, 6, 1)) |i| {
+        if (c) {
+            break;
+        }
+        sum += i;
+    }
+    return sum;
+}
+
+// -----
+
+// =============================================================================
+// Single-iteration for loop with a nested continue: not inlined, because the
+// continue skips the rest of the body
+// =============================================================================
+
+// CHECK: export fn for_single_iter_nested_continue(param0: bool) i32 {
+// CHECK:     var sum: i32 = @as(i32, 0);
+// CHECK:     for (@range(i32, 5, 6, 1)) |i| {
+// CHECK:         if (param0) {
+// CHECK:             continue;
+// CHECK:         }
+// CHECK:         sum += i;
+// CHECK:     }
+// CHECK:     return sum;
+// CHECK: }
+export fn for_single_iter_nested_continue(c: bool) i32 {
+    var sum: i32 = 0;
+    for (@range(i32, 5, 6, 1)) |i| {
+        if (c) {
+            continue;
+        }
+        sum += i;
+    }
+    return sum;
+}

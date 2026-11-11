@@ -1,0 +1,818 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file
+
+// =============================================================================
+// Basic for loop iteration
+// =============================================================================
+
+comptime {
+  var sum: comptime_int = 0;
+  for (@range(comptime_int, 0, 5, 1)) |i| {
+    sum = sum + i;
+  }
+  // sum should be 0 + 1 + 2 + 3 + 4 = 10
+  // expected-remark @+1 {{10}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// For loop with element and index
+// =============================================================================
+
+comptime {
+  var elem_sum: comptime_int = 0;
+  var idx_sum: comptime_int = 0;
+  for (@range(comptime_int, 10, 13, 1)) |elem, idx| {
+    elem_sum = elem_sum + elem;
+    idx_sum = idx_sum + idx;
+  }
+  // elem_sum should be 10 + 11 + 12 = 33
+  // idx_sum should be 0 + 1 + 2 = 3
+  // expected-remark @+1 {{33}}
+  @comptime_print(elem_sum);
+  // expected-remark @+1 {{3}}
+  @comptime_print(idx_sum);
+}
+
+// -----
+
+// =============================================================================
+// For loop with break - exits early
+// =============================================================================
+
+comptime {
+  var count: comptime_int = 0;
+  for (@range(comptime_int, 0, 10, 1)) |i| {
+    if (i == 5) {
+      break;
+    }
+    count = count + 1;
+  }
+  // count should be 5 (iterations 0,1,2,3,4 before break at 5)
+  // expected-remark @+1 {{5}}
+  @comptime_print(count);
+}
+
+// -----
+
+// =============================================================================
+// For loop with continue - skips iteration
+// =============================================================================
+
+comptime {
+  var sum: comptime_int = 0;
+  for (@range(comptime_int, 0, 5, 1)) |i| {
+    if (i == 2) {
+      continue;
+    }
+    sum = sum + i;
+  }
+  // sum should be 0 + 1 + 3 + 4 = 8 (skipping 2)
+  // expected-remark @+1 {{8}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Code after break does NOT execute
+// =============================================================================
+
+comptime {
+  var after_break: comptime_int = 0;
+  for (@range(comptime_int, 0, 3, 1)) |i| {
+    if (i == 1) {
+      break;
+      after_break = 999;  // This should NOT execute
+    }
+    after_break = after_break + 1;
+  }
+  // after_break should be 1 (only iteration 0 completed)
+  // expected-remark @+1 {{1}}
+  @comptime_print(after_break);
+}
+
+// -----
+
+// =============================================================================
+// Code after continue does NOT execute
+// =============================================================================
+
+comptime {
+  var after_continue: comptime_int = 0;
+  for (@range(comptime_int, 0, 3, 1)) |i| {
+    if (i == 1) {
+      continue;
+      after_continue = 999;  // This should NOT execute
+    }
+    after_continue = after_continue + 1;
+  }
+  // after_continue should be 2 (iterations 0 and 2 completed, 1 skipped)
+  // expected-remark @+1 {{2}}
+  @comptime_print(after_continue);
+}
+
+// -----
+
+// =============================================================================
+// Nested for loops
+// =============================================================================
+
+comptime {
+  var total: comptime_int = 0;
+  for (@range(comptime_int, 0, 3, 1)) |i| {
+    for (@range(comptime_int, 0, 2, 1)) |j| {
+      total = total + 1;
+    }
+  }
+  // total should be 3 * 2 = 6
+  // expected-remark @+1 {{6}}
+  @comptime_print(total);
+}
+
+// -----
+
+// =============================================================================
+// Break in nested loop (only breaks inner)
+// =============================================================================
+
+comptime {
+  var outer_count: comptime_int = 0;
+  var inner_count: comptime_int = 0;
+  for (@range(comptime_int, 0, 3, 1)) |i| {
+    outer_count = outer_count + 1;
+    for (@range(comptime_int, 0, 5, 1)) |j| {
+      if (j == 2) {
+        break;
+      }
+      inner_count = inner_count + 1;
+    }
+  }
+  // outer_count should be 3
+  // inner_count should be 3 * 2 = 6 (each outer iteration runs inner 2 times before break)
+  // expected-remark @+1 {{3}}
+  @comptime_print(outer_count);
+  // expected-remark @+1 {{6}}
+  @comptime_print(inner_count);
+}
+
+// -----
+
+// =============================================================================
+// Empty range (zero iterations)
+// =============================================================================
+
+comptime {
+  var count: comptime_int = 0;
+  for (@range(comptime_int, 5, 5, 1)) |i| {
+    count = count + 1;
+  }
+  // count should be 0 (empty range)
+  // expected-remark @+1 {{0}}
+  @comptime_print(count);
+}
+
+// -----
+
+// =============================================================================
+// Reverse range with negative step
+// =============================================================================
+
+comptime {
+  var sum: comptime_int = 0;
+  for (@range(comptime_int, 5, 0, -1)) |i| {
+    sum = sum + i;
+  }
+  // sum should be 5 + 4 + 3 + 2 + 1 = 15
+  // expected-remark @+1 {{15}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Multiple breaks at different points
+// =============================================================================
+
+comptime {
+  var result: comptime_int = 0;
+  for (@range(comptime_int, 0, 10, 1)) |i| {
+    if (i == 3) {
+      result = 100;
+      break;
+    }
+    if (i == 7) {
+      result = 200;  // Should never reach this
+      break;
+    }
+    result = i;
+  }
+  // result should be 100 (first break at i=3)
+  // expected-remark @+1 {{100}}
+  @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Continue with multiple conditions
+// =============================================================================
+
+comptime {
+  var sum: comptime_int = 0;
+  for (@range(comptime_int, 0, 10, 1)) |i| {
+    // Skip even numbers
+    if (i == 0) {
+      continue;
+    }
+    if (i == 2) {
+      continue;
+    }
+    if (i == 4) {
+      continue;
+    }
+    if (i == 6) {
+      continue;
+    }
+    if (i == 8) {
+      continue;
+    }
+    sum = sum + i;
+  }
+  // sum should be 1 + 3 + 5 + 7 + 9 = 25
+  // expected-remark @+1 {{25}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// For loop with short-form range (2 args: type, stop)
+// =============================================================================
+
+comptime {
+  var sum: comptime_int = 0;
+  for (@range(comptime_int, 5)) |i| {
+    sum = sum + i;
+  }
+  // sum should be 0 + 1 + 2 + 3 + 4 = 10
+  // expected-remark @+1 {{10}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Dead code after early return with comptime-known true condition
+// =============================================================================
+
+fn early_return() i32 {
+  if (true) {
+    return 1;
+  }
+  return 2;  // Dead code - needs DCE pass to eliminate
+}
+
+comptime {
+  // expected-remark @+1 {{1}}
+  @comptime_print(early_return());
+  @export_symbol(early_return);
+}
+
+// -----
+
+// =============================================================================
+// Dead code with variable requiring type inference
+// =============================================================================
+
+fn early_return_with_inference() i32 {
+  if (true) {
+    return 1;
+  }
+  // Dead code - type of x is never inferred
+  const x = 42;
+  return x;
+}
+
+comptime {
+  // expected-remark @+1 {{1}}
+  @comptime_print(early_return_with_inference());
+  @export_symbol(early_return_with_inference);
+}
+
+// -----
+
+// =============================================================================
+// Dead code with function call requiring type inference
+// =============================================================================
+
+fn helper() i32 { return 42; }
+
+fn early_return_with_call() i32 {
+  if (true) {
+    return 1;
+  }
+  return helper();
+}
+
+comptime {
+  @export_symbol(early_return_with_call);
+  @export_symbol(helper);
+}
+
+// -----
+
+// =============================================================================
+// Dead code with builtin (@is_arch) requiring type inference
+// =============================================================================
+
+fn early_return_with_is_arch() i32 {
+  if (true) {
+    return 1;
+  }
+  if (@is_arch("wse3")) {
+    return 3;
+  }
+  return 2;
+}
+
+comptime {
+  @export_symbol(early_return_with_is_arch);
+}
+
+// -----
+
+// =============================================================================
+// Basic comptime while loop
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  while (i < 5) {
+    sum = sum + i;
+    i = i + 1;
+  }
+  // sum should be 0 + 1 + 2 + 3 + 4 = 10
+  // expected-remark @+1 {{10}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Comptime while loop with break
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var count: comptime_int = 0;
+  while (i < 10) {
+    if (i == 5) {
+      break;
+    }
+    count = count + 1;
+    i = i + 1;
+  }
+  // count should be 5 (iterations 0,1,2,3,4 before break at 5)
+  // expected-remark @+1 {{5}}
+  @comptime_print(count);
+}
+
+// -----
+
+// =============================================================================
+// Comptime while loop with continue
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  while (i < 5) {
+    i = i + 1;
+    if (i == 3) {
+      continue;
+    }
+    sum = sum + i;
+  }
+  // sum should be 1 + 2 + 4 + 5 = 12 (skipping 3)
+  // expected-remark @+1 {{12}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Comptime while loop with continuation expression
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  while (i < 5) : (i = i + 1) {
+    sum = sum + i;
+  }
+  // sum should be 0 + 1 + 2 + 3 + 4 = 10
+  // expected-remark @+1 {{10}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Nested comptime while loops
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var total: comptime_int = 0;
+  while (i < 3) {
+    var j: comptime_int = 0;
+    while (j < 2) {
+      total = total + 1;
+      j = j + 1;
+    }
+    i = i + 1;
+  }
+  // total should be 3 * 2 = 6
+  // expected-remark @+1 {{6}}
+  @comptime_print(total);
+}
+
+// -----
+
+// =============================================================================
+// While loop condition initially false (zero iterations)
+// =============================================================================
+
+comptime {
+  var count: comptime_int = 0;
+  while (false) {
+    count = count + 1;
+  }
+  // count should be 0 (loop never executed)
+  // expected-remark @+1 {{0}}
+  @comptime_print(count);
+}
+
+// -----
+
+// =============================================================================
+// While loop with continuation executed on continue
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  var cont_count: comptime_int = 0;
+  while (i < 5) : (cont_count = cont_count + 1) {
+    i = i + 1;
+    if (i == 3) {
+      continue;  // Should still execute continuation
+    }
+    sum = sum + i;
+  }
+  // i goes: 1, 2, 3 (continue), 4, 5
+  // sum should be 1 + 2 + 4 + 5 = 12 (skipping when i=3)
+  // expected-remark @+1 {{12}}
+  @comptime_print(sum);
+  // cont_count should be 5 (continuation executes every iteration including continue)
+  // expected-remark @+1 {{5}}
+  @comptime_print(cont_count);
+}
+
+// -----
+
+// =============================================================================
+// While loop with continuation NOT executed on break
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var cont_count: comptime_int = 0;
+  while (i < 10) : (cont_count = cont_count + 1) {
+    if (i == 3) {
+      break;  // Should NOT execute continuation
+    }
+    i = i + 1;
+  }
+  // i goes: 0->1, 1->2, 2->3, then break at i=3
+  // cont_count should be 3 (not 4, because break doesn't run continuation)
+  // expected-remark @+1 {{3}}
+  @comptime_print(cont_count);
+}
+
+// -----
+
+// =============================================================================
+// While continuation with compound assignment (i += 1)
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  while (i < 5) : ({i += 1;}) {
+    sum += i;
+  }
+  // sum = 0+1+2+3+4 = 10, i = 5
+  // expected-remark @+1 {{10}}
+  @comptime_print(sum);
+  // expected-remark @+1 {{5}}
+  @comptime_print(i);
+}
+
+// -----
+
+// =============================================================================
+// While continuation with compound assignment: continue still runs continuation
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  while (i < 5) : ({i += 1;}) {
+    if (i == 2) {
+      continue;
+    }
+    sum += i;
+  }
+  // sum = 0+1+3+4 = 8 (skipping i=2)
+  // expected-remark @+1 {{8}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// While continuation with compound assignment: break does NOT run continuation
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  while (i < 10) : ({i += 1;}) {
+    if (i == 3) {
+      break;
+    }
+  }
+  // break at i=3, continuation does NOT execute, so i stays at 3
+  // expected-remark @+1 {{3}}
+  @comptime_print(i);
+}
+
+// -----
+
+// =============================================================================
+// While continuation inside labeled block: break :outer skips continuation
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  outer: {
+    while (i < 10) : ({i += 1;}) {
+      if (i >= 3) {
+        break :outer;
+      }
+      sum += i;
+    }
+  }
+  // break :outer at i=3, continuation does NOT execute
+  // sum = 0+1+2 = 3, i = 3
+  // expected-remark @+1 {{3}}
+  @comptime_print(sum);
+  // expected-remark @+1 {{3}}
+  @comptime_print(i);
+}
+
+// -----
+
+// =============================================================================
+// Labeled block inside while body with continuation
+// =============================================================================
+
+comptime {
+  var i: comptime_int = 0;
+  var sum: comptime_int = 0;
+  while (i < 5) : ({i += 1;}) {
+    blk: {
+      if (i == 2) {
+        break :blk;  // skip rest of block, but continuation still runs
+      }
+      sum += i;
+    }
+  }
+  // sum = 0+1+3+4 = 8 (block skipped at i=2, but loop continues)
+  // expected-remark @+1 {{8}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Basic labeled block with break
+// =============================================================================
+
+comptime {
+  var x: comptime_int = 0;
+  blk: {
+    x = 42;
+    break :blk;
+    x = 99;  // dead
+  }
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+}
+
+// -----
+
+// =============================================================================
+// Labeled block fallthrough (no break)
+// =============================================================================
+
+comptime {
+  var x: comptime_int = 0;
+  blk: {
+    x = 42;
+  }
+  // x should be 42 (fell through without break)
+  // expected-remark @+1 {{42}}
+  @comptime_print(x);
+}
+
+// -----
+
+// =============================================================================
+// Nested labeled blocks
+// =============================================================================
+
+comptime {
+  var x: comptime_int = 0;
+  outer: {
+    inner: {
+      x = 1;
+      break :inner;
+      x = 2;  // dead
+    }
+    x = x + 10;
+    break :outer;
+    x = 99;  // dead
+  }
+  // x should be 1 + 10 = 11
+  // expected-remark @+1 {{11}}
+  @comptime_print(x);
+}
+
+// -----
+
+// =============================================================================
+// Break :outer from nested inner block skips outer code
+// =============================================================================
+
+comptime {
+  var x: comptime_int = 0;
+  outer: {
+    inner: {
+      x = 1;
+      break :outer;
+      x = 2;  // dead
+    }
+    x = 99;  // dead - break :outer jumped past this
+  }
+  // x should be 1
+  // expected-remark @+1 {{1}}
+  @comptime_print(x);
+}
+
+// -----
+
+// =============================================================================
+// Labeled block around while loop with break :outer
+// =============================================================================
+
+comptime {
+  var sum: comptime_int = 0;
+  var i: comptime_int = 0;
+  outer: {
+    while (i < 10) : ({i += 1;}) {
+      if (i >= 5) {
+        break :outer;
+      }
+      sum = sum + i;
+    }
+  }
+  // sum should be 0+1+2+3+4 = 10
+  // expected-remark @+1 {{10}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Valued break from labeled block
+// =============================================================================
+
+comptime {
+  var result: comptime_int = blk: {
+    if (true) {
+      break :blk 42;
+    }
+    break :blk 0;
+  };
+  // expected-remark @+1 {{42}}
+  @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Valued break - only path taken
+// =============================================================================
+
+comptime {
+  var result: comptime_int = blk: {
+    break :blk 7;
+  };
+  // expected-remark @+1 {{7}}
+  @comptime_print(result);
+}
+
+// -----
+
+// =============================================================================
+// Labeled block in for loop body
+// =============================================================================
+
+comptime {
+  var sum: comptime_int = 0;
+  for (@range(comptime_int, 0, 5, 1)) |i| {
+    blk: {
+      if (i == 3) {
+        break :blk;  // skip rest of block for i=3
+      }
+      sum = sum + i;
+    }
+  }
+  // sum should be 0+1+2+4 = 7 (skipping 3)
+  // expected-remark @+1 {{7}}
+  @comptime_print(sum);
+}
+
+// -----
+
+// =============================================================================
+// Error: continue cannot target labeled block
+// =============================================================================
+
+fn test_continue_labeled_block(n: i32) void {
+  blk: {
+    // expected-error @+1 {{continue cannot target labeled block}}
+    continue :blk;
+  }
+}
+
+comptime {
+  @export_symbol(test_continue_labeled_block);
+}
+
+// -----
+
+// =============================================================================
+// Make sure (void) builtin calls and function calls return void type
+// =============================================================================
+
+fn void_fn1() void {}
+export fn void_always_comptime_known(someBool : bool) void {
+  const v0 = {};
+  @comptime_assert(@type_of(v0) == void);
+
+  const v1 = @comptime_assert(true);
+  @comptime_assert(@type_of(v1) == void);
+
+  const v2 = if(someBool) @comptime_assert(true) else @comptime_assert(true);
+  @comptime_assert(@type_of(v2) == void);
+
+  const v3 = void_fn1();
+  @comptime_assert(@type_of(v3) == void);
+}
+
+// -----
+
+// =============================================================================
+// Make sure void values are always comptime-known
+// =============================================================================
+
+fn void_fn2() void {}
+
+comptime {
+  const v0 = {};
+  @comptime_assert(@type_of(v0) == void);
+
+  const v1 = @comptime_assert(true);
+  @comptime_assert(@type_of(v1) == void);
+
+  const v2 = void_fn2();
+  @comptime_assert(@type_of(v2) == void);
+
+  if (@is_arch("wse3")) @unblock(@get_local_task_id(0)) else @unblock(@get_local_task_id(0));
+}

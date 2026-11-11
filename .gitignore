@@ -1,0 +1,25 @@
+build/
+tmp/
+.cache/
+*.pyc
+bin/
+.lit_test_times.txt
+
+# cslc outdir
+**/out/
+simconfig.json
+sim_stats.json
+**/wio_flows*/
+**/simfab_traces/
+
+# VSCode CSL extension
+editors/vscode/node_modules/
+editors/vscode/out/
+.conan2/
+CMakeUserPresets.json
+conan/test_package/build/
+.venv/
+
+# Release packaging (packaging/wheel/build-wheel.py)
+/stage/
+/dist/

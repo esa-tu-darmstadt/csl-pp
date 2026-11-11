@@ -1,0 +1,40 @@
+// RUN: csl-s2s %s -verify-diagnostics --split-input-file --count-tasks=false --arch=wse3 | FileCheck %s
+//
+// @count_free(T) counts the free resources of the kind T names. At comptime
+// it counts what the memcpy reservation and the comptime claims so far have
+// left.
+
+comptime {
+  // expected-remark @+1 {{20}}
+  @comptime_print(@count_free(color));
+  // expected-remark @+1 {{18}}
+  @comptime_print(@count_free(local_task_id));
+  // On WSE-3, data tasks are input queues.
+  // expected-remark @+1 {{6}}
+  @comptime_print(@count_free(data_task_id));
+  // expected-remark @+1 {{6}}
+  @comptime_print(@count_free(input_queue));
+  // expected-remark @+1 {{6}}
+  @comptime_print(@count_free(output_queue));
+  // expected-remark @+1 {{27}}
+  @comptime_print(@count_free(control_task_id));
+
+  const claimed = @claim_local_task();
+  // expected-remark @+1 {{17}}
+  @comptime_print(@count_free(local_task_id));
+}
+
+// At runtime, it calls into the allocator.
+// CHECK-LABEL: fn count_tasks() void {
+// CHECK-NEXT:    free_tasks = __alloc_runtime__count_free_local_tasks();
+var free_tasks: u16 = 0;
+fn count_tasks() void {
+  free_tasks = @count_free(local_task_id);
+}
+comptime { @export_symbol(count_tasks); }
+
+// -----
+
+// expected-error @+1 {{@count_free counts the free resources of a kind given by its ID type: color, local_task_id, data_task_id, input_queue, output_queue or control_task_id, not 'u16'}}
+const not_a_resource = @count_free(u16);
+comptime { @comptime_print(not_a_resource); }

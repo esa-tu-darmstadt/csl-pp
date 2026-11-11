@@ -1,0 +1,7 @@
+// Module with extern function - should keep original name after inlining
+
+extern fn external_runtime_func(x: i32) i32;
+
+fn use_external(x: i32) i32 {
+    return external_runtime_func(x) + 1;
+}

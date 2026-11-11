@@ -1,0 +1,21 @@
+---
+title: Binding tasks at runtime
+description: Calling @bind_local_task, @bind_data_task and @bind_control_task in runtime code.
+---
+
+import Example from '../../../components/Example.astro';
+
+In CSL, `@bind_local_task`, `@bind_data_task` and `@bind_control_task` can only be called at compile time. In csl++, they can also be called in runtime code. Together with runtime claims, a program can take a task ID while it runs, bind a task to it, and release it later:
+
+<Example file="language/resources/src/pe.csl" region="bind" />
+
+Rules:
+
+- The first argument must be a function known at compile time. The task ID can be a runtime value.
+- Async tasks cannot be bound at runtime.
+- A bind at runtime writes the task table entry of the ID and then flushes the instruction cache, which takes some cycles each time. On WSE-2, it also unblocks the task, because tasks bound at runtime start blocked there.
+- The ID should be claimed at runtime. Binding to a fixed ID at runtime replaces whatever is bound to it.
+
+`cslc` may place the code of a task bound at compile time into the task table entries after its own. If a program claims task IDs at runtime, `csl-pp` therefore binds an empty task to the entry after each task bound at compile time, if that entry could be claimed. This keeps runtime binds from overwriting the code of other tasks. Claims do not return these entries.
+
+`@await_parallel` uses runtime binds for its worker tasks.
