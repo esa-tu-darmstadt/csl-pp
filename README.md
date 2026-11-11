@@ -1,5 +1,10 @@
 # csl++
 
+[![CI](https://github.com/esa-tu-darmstadt/csl-pp/actions/workflows/ci.yml/badge.svg)](https://github.com/esa-tu-darmstadt/csl-pp/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/csl-pp)](https://pypi.org/project/csl-pp/)
+[![Documentation](https://img.shields.io/badge/docs-esa--tu--darmstadt.github.io%2Fcsl--pp-blue)](https://esa-tu-darmstadt.github.io/csl-pp/)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20WITH%20LLVM--exception-blue)](LICENSE.TXT)
+
 csl++ is a place to develop new language features for the Cerebras Software Language (CSL) and to test them at wafer scale. It extends CSL, so every CSL program is also a csl++ program. It currently adds async functions and tasks, and automatic allocation of colors, task IDs and queues.
 
 The csl++ compiler `csl-pp` is a drop-in replacement for `cslc` and takes the same command-line arguments. It translates a program to vanilla CSL and then compiles the result with `cslc`, the compiler of the Cerebras SDK.

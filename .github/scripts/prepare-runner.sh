@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# Makes room on a GitHub-hosted runner for builds of LLVM and csl-mlir.
+# Selects the directory for the build on a GitHub-hosted runner.
 #
-# Removes preinstalled toolchains the builds do not use and selects the file
-# system with the most free space for CI_WORK (see container.sh), which is
+# CI_WORK (see container.sh) holds the Conan home, with the LLVM package of
+# several gigabytes, and the ccache directory. It goes to the file system with
+# the most free space, usually the runner's second disk at /mnt, and is
 # appended to $GITHUB_ENV.
 set -euo pipefail
-
-sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-  /opt/hostedtoolcache/CodeQL /usr/share/swift
-sudo docker image prune --all --force > /dev/null
 
 free_kb() { df --output=avail -k "$1" | tail -n 1; }
 work="$RUNNER_TEMP/ci-work"
