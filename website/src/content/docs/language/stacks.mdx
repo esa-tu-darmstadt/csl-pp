@@ -11,7 +11,7 @@ Every async task runs on a stack of its own, which `csl-pp` allocates as a globa
 - `@await_parallel` adds the stack use of all its calls, because they can be suspended at the same time. Each call except the first also needs 12 bytes for its arguments.
 - Calls in sequence reuse the same memory.
 
-The frame sizes are decided by `cslc`. `csl-pp` therefore compiles a program with async tasks twice: the first `cslc` run reports the frame size of every function, and the second compiles the program with stacks of the computed sizes. See [Using csl-pp](../../tools/csl-pp/#stack-sizes).
+The frame sizes are decided by `cslc`. `csl-pp` therefore compiles a program with async tasks twice: the first `cslc` run reports the frame size of every function, and the second compiles the program with stacks of the computed sizes. See [Stack sizes](../../tools/csl-pp/#stack-sizes).
 
 This computation needs a bounded stack use for every function that an async task can reach. Recursion and `extern` functions need an annotation.
 

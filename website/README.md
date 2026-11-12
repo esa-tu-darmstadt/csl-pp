@@ -23,12 +23,12 @@ CSL code is highlighted with the grammar of the VS Code extension in `editors/vs
 
 ## Examples
 
-Every example in `examples/<group>/<name>/` is a complete program with `src/layout.csl`, `src/pe.csl`, a host program `run.py` and the scripts `commands_wse2.sh` and `commands_wse3.sh`. The integration tests (`check-csl-integration`) run these scripts, so the code on the site is compiled and run in the simulator.
+Every example in `examples/<group>/<name>/` is a complete program with a layout file and its PE programs in `src/`, a host program `run.py` and the scripts `commands_wse2.sh` and `commands_wse3.sh`. The integration tests (`check-csl-integration`) run these scripts, so the code on the site is compiled and run in the simulator.
 
 A page shows a file, or a region of it, with
 
 ```mdx
-<Example file="tutorial/01-async/src/pe.csl" region="async" />
+<Example file="tutorial/4-parallel/src/receiver.csl" region="task" />
 ```
 
-where the region is marked in the file by `// region: async` and `// endregion` lines. Marker lines are not shown.
+where the region is marked in the file by `// region: task` and `// endregion` lines. Marker lines are not shown. Only the examples carry such markers. Code of the libraries in `csl-libs/` that a page shows is written into the page.

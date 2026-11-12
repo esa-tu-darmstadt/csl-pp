@@ -54,7 +54,7 @@ The runtime's own functions, which prepare a suspend and perform a resume, appea
 
 ## Example
 
-The conjugate gradient solver of the [tutorial](../../tutorial/4-run/) runs on 25 PEs. After `./commands_wse3.sh`, the trace of the run is in `simfab_traces/` in the example directory, next to `out/`. Tiles are named by their fabric coordinates: the program was compiled with `--fabric-offsets=4,1`, so PE (2, 2) of the program is tile `6.3`.
+The [conjugate gradient example](../../guides/solver/) runs on 25 PEs. After `./commands_wse3.sh`, the trace of the run is in `simfab_traces/` in the example directory, next to `out/`. Tiles are named by their fabric coordinates: the program was compiled with `--fabric-offsets=4,1`, so PE (2, 2) of the program is tile `6.3`.
 
 ```bash
 simtrace out stats --tile 6.3 --top 5

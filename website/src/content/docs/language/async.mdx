@@ -6,7 +6,9 @@ description: async fn, async task, suspend, @current_task() and @coro_runtime_in
 import { Aside } from '@astrojs/starlight/components';
 import Example from '../../../components/Example.astro';
 
-An async function or async task can suspend: it ends the current run of its hardware task and continues at the same point when the task is activated again. Its local variables keep their values and their addresses in between.
+An async function or async task can suspend: it ends the current run of the task that executes it and continues at the same point when that task is activated again. Its local variables keep their values and their addresses in between.
+
+These pages call the task that executes a piece of async code its hardware task. For an async task, it is the task itself. For an async function, it is the task of the caller, or a worker task in an [`@await_parallel`](../calls/#worker-tasks).
 
 ## `async fn`
 
@@ -94,4 +96,4 @@ Each async task has a stack of its own for these variables; see [Stacks](../stac
 
 ## Deadlocks
 
-Deadlocks between PEs are possible as in CSL. For example, two PEs that each wait for data from the other wait forever.
+Deadlocks between PEs are possible as in vanilla CSL. For example, two PEs that each wait for data from the other wait forever.

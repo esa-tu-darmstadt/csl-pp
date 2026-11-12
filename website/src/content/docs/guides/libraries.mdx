@@ -1,25 +1,71 @@
 ---
 title: Writing a library
-description: Rules for libraries that use claims and async functions.
+description: Structure of a csl++ library that claims its resources and offers async functions, and the rules it follows.
 sidebar:
   order: 2
 ---
 
-This page lists rules for libraries that are imported by several programs, several times, or together with other libraries. The [libraries](../../libraries/) of csl++ follow them; [step 3 of the tutorial](../../tutorial/3-resources/) shows what they claim.
+A csl++ library claims its resources and offers its operations as async functions. A program can then import it without resource parameters, import it more than once, and use it next to other libraries. The [libraries](../../libraries/) that come with csl++ are written as this page describes.
 
-## Structure
+## Layout part and PE part
 
 Like the libraries of the SDK, a library that uses the fabric has two parts:
 
-- A layout part, imported by the layout file. It claims colors with `@claim_color()`, routes them, and returns the parameters of the PE part for each PE, for example from a function `get_params(x, y)`.
-- A PE part, imported by the PE program with these parameters. It claims queues and task IDs with `@claim_input_queue()`, `@claim_output_queue()` and `@claim_local_task()`, and declares the async functions that programs call.
+- The layout part is imported by the layout file. It claims the colors of the library with `@claim_color()` and returns the parameters of the PE part for each PE, usually from a function `get_params(px, py)`.
+- The PE part is imported by the PE program with these parameters. It configures the routes of the colors, claims its queues and task IDs, and declares the async functions that programs call.
 
-Colors are claimed in the layout part, because they are routed in the layout file. A color claimed in the layout file or a module it imports is reserved for all PE programs.
+The colors are claimed in the layout part because a claim in the layout file, or in a module that the layout file imports, reserves the color in all PE programs. This is the layout part of `allreduce`, without its comments:
+
+```csl
+param width: i16;
+param height: i16;
+
+const C0: color = @claim_color();
+
+const Params = struct {
+    first_px: bool,
+    last_px: bool,
+    first_py: bool,
+    last_py: bool,
+    C_ROUTE: color,
+    width: i16,
+    height: i16,
+};
+
+fn get_params(px: i16, py: i16) Params {
+    return Params {
+        .first_px = (0 == px),
+        .last_px = ((width - 1) == px),
+        .first_py = (0 == py),
+        .last_py = ((height - 1) == py),
+        .C_ROUTE = C0,
+        .width = width,
+        .height = height
+    };
+}
+```
+
+The PE part takes this struct as a parameter and claims the queues on which it sends and receives:
+
+```csl
+param reduce_params;
+param dsr_id: u16 = 1;
+
+const iq_route: input_queue = @claim_input_queue();
+const oq_route: output_queue = @claim_output_queue();
+
+async fn allreduce(n: i16, in_tensor: [*]f32, op: TYPE_BINARY_OP) void {
+    // ...
+}
+```
 
 ## Rules
 
-- Claim every resource. Use no fixed color, queue or task ID. Each import of the library is a separate instance and makes its own claims, so a program can import the library several times.
-- Offer async functions. An `async fn` that starts an operation, suspends and returns when the operation has completed can be awaited by the program and combined with other library calls in `@await_parallel`. Callers do not pass task IDs.
-- One instance per concurrent use. Calls that run at the same time, for example in one `@await_parallel`, must not share queues. Import the library once for each call that can run at the same time as another.
-- Leave initialization to the program. If the library binds an async task, the program must call `@coro_runtime_init()`; say so in the documentation of the library.
-- Declare stack sizes of extern functions. An `extern fn` that an async function of the library calls needs `stack_size(N)`; see [Stacks](../../language/stacks/#stack_sizen).
+- Claim every color, queue and task ID, and use no fixed number. Each import of the library then is an instance with resources of its own, and a program can import the library several times.
+- Offer the operations as async functions. A program awaits them and can run them next to other calls in an `@await_parallel`. No caller has to pass a task ID.
+- Document that at most one operation of an instance runs at a time, if the operations share queues or state. A program that needs two operations at the same time imports the library twice.
+- Take the DSRs as a parameter. csl++ has no claim builtin for DSRs, and two instances whose operations run at the same time need different DSRs.
+- Leave the initialization of the runtime to the program. A program that awaits an async function has an async task and calls `@coro_runtime_init()` itself.
+- Give `extern` functions a stack size. An `extern fn` that an async function of the library calls needs `stack_size(N)`; see [Stacks](../../language/stacks/#stack_sizen).
+
+[Step 3 of the tutorial](../../tutorial/3-claims/) introduces the claim builtins, and [Claims](../../language/resources/) is their reference.

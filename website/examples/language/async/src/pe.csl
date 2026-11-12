@@ -2,9 +2,6 @@ param memcpy_params;
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
-var result: [1]u32;
-var result_ptr: [*]u32 = &result;
-
 // region: async-fn
 // Suspends once, then returns x + 1.
 async fn next(x: u32) u32 {
@@ -46,7 +43,9 @@ async fn spread(x: u32) u32 {
 const main_task_id: local_task_id = @claim_local_task();
 
 async task main_task() void {
-  result[0] = @await(twice(1)) + @await(three_at_once()) + @await(spread(5));
+  @assert(@await(twice(1)) == 3);
+  @assert(@await(three_at_once()) == 13);
+  @assert(@await(spread(5)) == 18);
   sys_mod.unblock_cmd_stream();
 }
 
@@ -62,6 +61,5 @@ comptime {
 // endregion
 
 comptime {
-  @export_symbol(result_ptr, "result");
   @export_symbol(compute);
 }

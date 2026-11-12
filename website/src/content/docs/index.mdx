@@ -15,6 +15,7 @@ hero:
 ---
 
 import Pipeline from '../../components/Pipeline.astro';
+import Example from '../../components/Example.astro';
 
 csl++ is a place to develop new language features for CSL and to test them at wafer scale. It extends CSL, so every CSL program is also a csl++ program.
 
@@ -24,31 +25,17 @@ The csl++ compiler `csl-pp` is a drop-in replacement for `cslc` and takes the sa
 
 ## Language extensions
 
-csl++ currently adds two extensions to CSL. The [Language](language/overview/) section is their reference, the [Tutorial](tutorial/) uses both in a conjugate gradient solver, and the [libraries](libraries/) that come with csl++ are written with them.
+csl++ currently adds two extensions to CSL. The [Tutorial](tutorial/) introduces them step by step with one small program, and the [Language](language/overview/) section is their reference. The [libraries](libraries/) that come with csl++ are written with them.
 
 <div class="feature">
 
 ### Async CSL
 
-A CSL task runs to completion, so a sequence of asynchronous fabric operations is written as one task per step, or as a state machine with its values in globals. In csl++, a task can suspend: it ends its current run at `suspend` and continues after it when it is activated again, with its local variables intact.
+A task of vanilla CSL runs to completion, so a sequence of asynchronous fabric operations is written as one task per step, or as a state machine with its values in globals. In csl++, a task can suspend: it ends its current run at `suspend` and continues after it when it is activated again, with its local variables intact.
 
-```csl
-async fn recv_squared(comptime in: fabin_dsd) f32 {
-  var x: f32 = 0.0;
-  @fmovs(&x, in, .{ .async = true, .activate = @current_task() });
-  suspend;  // continues here when the value has arrived
-  x *= x;
-  return x;
-}
+<Example file="tutorial/4-parallel/src/receiver.csl" region="async" />
 
-async task main() void {
-  // Receive from both neighbors at the same time.
-  const r = @await_parallel(recv_squared(west_dsd), recv_squared(east_dsd));
-  sum = r[0] + r[1];
-}
-```
-
-`@await_parallel` runs several calls of async functions at the same time and continues when all of them have returned; `@await` calls a single one like an ordinary function. A library offers async functions instead of taking a task ID to activate when it is done.
+An async function is called with `@await` like an ordinary function and returns its result. `@await_parallel` runs several calls at the same time and continues when all of them have returned. A library offers async functions instead of taking a task ID to activate when it is done.
 
 [Async functions and tasks →](language/async/)
 
@@ -58,7 +45,7 @@ async task main() void {
 
 ### Automatic resource allocation
 
-CSL names colors, task IDs and queues by number. The numbers of all modules of a program must be distinct, so the programmer keeps a table of them and passes them into every library. In csl++, a module claims what it needs. A claim at compile time returns a resource that no other claim and no fixed ID of the program uses; a claim at runtime takes one of those that are left, and can be released again:
+Vanilla CSL names colors, task IDs and queues by number. The numbers of all modules of a program must be distinct, so the programmer keeps a table of them and passes them into every library. In csl++, a module claims what it needs. A claim at compile time returns a resource that no other claim returns and that memcpy does not use. A claim at runtime takes one of those that are left, and can be released again:
 
 ```csl
 const c_route: color = @claim_color();
@@ -87,7 +74,7 @@ Three libraries of the Cerebras SDK benchmarks are ported to csl++ and come with
 <ol class="steps">
 <li>
 
-**Install `csl-pp`** from PyPI, next to the Cerebras SDK. [Installation →](start/installation/)
+Install `csl-pp` from PyPI, next to the Cerebras SDK. [Installation →](start/installation/)
 
 ```bash
 pipx install csl-pp
@@ -96,7 +83,7 @@ pipx install csl-pp
 </li>
 <li>
 
-**Compile a CSL program with it.** Replace `cslc` by `csl-pp` in the command of any SDK example; the arguments stay the same. [Quickstart →](start/quickstart/)
+Compile a CSL program with it: replace `cslc` with `csl-pp` in the command of any SDK example. The arguments stay the same. [Quickstart →](start/quickstart/)
 
 ```bash
 csl-pp ./layout.csl --arch=wse3 --fabric-dims=8,3 --fabric-offsets=4,1 -o out --memcpy --channels=1
@@ -105,7 +92,7 @@ csl-pp ./layout.csl --arch=wse3 --fabric-dims=8,3 --fabric-offsets=4,1 -o out --
 </li>
 <li>
 
-**Write a first async task**, then follow the tutorial through a complete solver. [Tutorial →](tutorial/)
+Follow the tutorial, which introduces `suspend`, async functions, claims and parallel calls. [Tutorial →](tutorial/)
 
 </li>
 </ol>

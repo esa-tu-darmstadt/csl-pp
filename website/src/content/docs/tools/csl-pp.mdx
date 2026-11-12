@@ -14,7 +14,7 @@ csl-pp layout.csl --arch=wse3 --fabric-dims=11,3 --fabric-offsets=4,1 \
 
 It accepts the options of `cslc` and passes them on. Options that `csl-pp` does not know are passed to `cslc` unchanged.
 
-## Stages
+## Compilation stages
 
 1. It parses the layout file and evaluates its comptime code, including the `--params`.
 2. For every `@set_tile_code` call, it compiles the PE program with the parameters of that call. Tiles with the same PE program and the same parameters share one compiled copy. In each copy, the parameters are comptime constants, and comptime code is evaluated with them.

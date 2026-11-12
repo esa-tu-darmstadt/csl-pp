@@ -1,43 +1,44 @@
 ---
 title: Troubleshooting
-description: Causes of common errors, hangs and halts in csl++ programs.
+description: Causes of hangs, halts and early resumes in csl++ programs, and the messages of csl-pp.
 sidebar:
   order: 4
 ---
 
-## The program hangs
+## Program hangs
 
-A suspended task continues only when it is activated. Check that:
+A suspended task continues only when it is activated. If a program hangs, check these points:
 
-- the operation before each `suspend` activates `@current_task()` when it completes (`.activate = @current_task()`, not `.unblock`, not another task);
-- the operation completes at all: the data it waits for is sent, and the data it sends is received;
-- the async task calls `sys_mod.unblock_cmd_stream()` at the end, if the host waits for `compute` with `nonblock=False`.
+- The operation before each `suspend` activates `@current_task()` when it completes: `.activate = @current_task()`, not `.unblock`, and not another task.
+- The operation completes at all. The data it waits for is sent, and the data it sends is received.
+- The async task calls `sys_mod.unblock_cmd_stream()` at its end, if the host waits for the launched function with `nonblock=False`.
+- A program that uses `@await_parallel` or claims task IDs at runtime claims its colors as well. On WSE-2, a color occupies the task ID with the same number, and a color that the program takes with `@get_color` can be given to a worker task; see [Fixed numbers](../../language/resources/#fixed-numbers).
 
-To see where a PE stopped, run the program on the simulator and look at the end of its trace with [simtracer](../../tools/simtracer/): `simtrace out show --tile x.y --cycles A:` prints the last instructions of the PE with the function they belong to, and `simtrace out find --tile x.y --func NAME` tells whether a function was entered at all.
+To see where a PE stopped, run the program on the simulator and look at the end of its trace with [simtracer](../../tools/simtracer/). `simtrace out show --tile x.y --cycles A:` prints the last instructions of the PE with the function they belong to, and `simtrace out find --tile x.y --func NAME` tells whether a function was entered at all.
 
-## The PE halts
+## PE halts
 
-A runtime claim that finds no free resource halts the PE. This includes the worker tasks of `@await_parallel`, which are claimed at runtime. `csl-pp` warns at compile time if it cannot prove that enough local task entries are free for the workers. Bind or claim fewer tasks, run fewer calls of `@await_parallel` at the same time, or check [`@count_free(local_task_id)`](../../language/resources/#counting-free-resources) before `@await_parallel`.
+A runtime claim that finds no free resource halts the PE. This includes the worker tasks of `@await_parallel`, which are claimed at runtime. `csl-pp` warns at compile time if it cannot prove that enough local task IDs are free for the workers. Bind or claim fewer tasks, run fewer calls of `@await_parallel` at the same time, or check [`@count_free(local_task_id)`](../../language/resources/#counting-free-resources) before `@await_parallel`.
 
-## A task continues too early
+## Task resumes too early
 
 A suspended task continues on any activation of its task ID. If other code activates the same ID, the task resumes before its operation has completed. Give the other code a task ID of its own.
 
-In a trace, such a resume shows as an entry of the runtime's entry function followed by a jump into the suspended function, before the operation's completion; `simtrace out wavelets --tile x.y` shows the wavelets that arrived around that cycle.
+In a trace, such a resume shows as an entry of the runtime's entry function followed by a jump into the suspended function, before the operation has completed. `simtrace out wavelets --tile x.y` shows the wavelets that arrived around that cycle.
 
 ## Messages of csl-pp
 
 | Message | What to do |
 | --- | --- |
 | `async task 't' is bound to a task, but the program never calls @coro_runtime_init()` | Call `@coro_runtime_init()` before the first async task is activated. |
-| `cannot prove that enough local tasks are free for the workers of @await_parallel` | See [The PE halts](#the-pe-halts). |
+| `cannot prove that enough local tasks are free for the workers of @await_parallel` | See [PE halts](#pe-halts). |
 | `the stack sizes of the async tasks in N PE program(s) are measured by compiling them with cslc, which --no-cslc skips` | Compile without `--no-cslc`, or declare `stack_size(N)`; see [Stack sizes](../../tools/csl-pp/#stack-sizes). |
-| `csl-pp needs '.../lib/libinject_mllvm.so' to measure the stack sizes` | The library is part of the `csl-pp` package; reinstall it. For a source build, install with `cmake --install`, which places the library next to `csl-pp`. |
+| `csl-pp needs '.../lib/libinject_mllvm.so' to measure the stack sizes` | The library is part of the `csl-pp` package; reinstall the package. For a build from source, install with `cmake --install`, which places the library next to `csl-pp`. |
 | `cannot read the Cerebras SDK image '...'` | Pass the `*.sif` file of the SDK with `--system-module-sif`. |
 | `system imports (e.g. <memcpy/memcpy>) require --system-module-sif or --system-import-path` | Put the SDK directory on your `PATH`, or pass `--system-module-sif`. |
 
-The messages about async code, stacks and resources are explained on the pages of the [Language](../../language/overview/) section.
+The pages of the [Language](../../language/overview/) section list the messages about async code, stacks and resources.
 
-## Looking at the generated CSL
+## Generated CSL
 
-`--work-dir=<dir>` keeps the CSL that `csl-pp` generates in `<dir>`; see [Output files](../../tools/csl-pp/#output-files). The generated code is ordinary CSL. Comptime code is evaluated, so parameters appear as constants, and claims appear as `@get_color(n)`, `@get_local_task_id(n)` and so on.
+`--work-dir=<dir>` keeps the CSL that `csl-pp` generates in `<dir>`; see [Output files](../../tools/csl-pp/#output-files). The generated code is vanilla CSL. Comptime code is evaluated, so parameters appear as constants, and claims appear as `@get_color(n)`, `@get_local_task_id(n)` and so on.

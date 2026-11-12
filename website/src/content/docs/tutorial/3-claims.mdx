@@ -1,0 +1,70 @@
+---
+title: 3. Claiming resources
+description: The claim builtins return colors, queues and task IDs that nothing else in the program uses, at compile time or at runtime.
+sidebar:
+  order: 3
+---
+
+import Example from '../../../components/Example.astro';
+
+The program of [step 2](../2-await/) chooses six numbers in three files: colors 0 and 1 in the layout file, input queues 2 and 3 and task ID 8 in the receiver, and output queue 2 in the sender. Each number has to be free. memcpy uses some colors, queues and task IDs itself, and every module that a program imports needs others. This step replaces the numbers with claims. The program of this step is in `website/examples/tutorial/3-claims`.
+
+## Claim builtins
+
+There is one claim builtin for each kind of resource, for example `@claim_color()` and `@claim_input_queue()`. A claim returns a resource of its kind that no other claim of the program returns and that memcpy does not use. The layout file claims the two colors:
+
+<Example file="tutorial/3-claims/src/layout.csl" region="colors" />
+
+The receiver claims its two input queues:
+
+<Example file="tutorial/3-claims/src/receiver.csl" region="queues" />
+
+In the same way, the receiver claims the ID of its task with `@claim_local_task()`, and the sender claims its output queue with `@claim_output_queue()`. Nothing else in the program changes.
+
+The program now contains no resource number. A library can be written in the same way. It is then imported without color, queue or task ID parameters, and two libraries in one program never get the same number. The [libraries](../../libraries/) that come with csl++ are written this way.
+
+## Claims at compile time
+
+All claims of this program initialize global constants. `csl-pp` resolves such a claim while it compiles the program: it chooses a free number, and the CSL that it generates contains this number in place of the claim. The claim costs nothing at runtime.
+
+The numbers are visible in the generated CSL. To keep the generated files, add `--work-dir=<dir>` to the `csl-pp` command. In the generated layout file, the two claimed colors have become colors 0 and 1:
+
+```csl
+@set_color_config(0, 0, @get_color(0), .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ EAST } } });
+@set_color_config(1, 0, @get_color(0), .{ .routes = .{ .rx = .{ WEST }, .tx = .{ RAMP } } });
+@set_color_config(1, 0, @get_color(1), .{ .routes = .{ .rx = .{ EAST }, .tx = .{ RAMP } } });
+@set_color_config(2, 0, @get_color(1), .{ .routes = .{ .rx = .{ RAMP }, .tx = .{ WEST } } });
+```
+
+`csl-pp` decides which number a claim gets, and a program must not rely on particular numbers.
+
+`csl-pp` compiles the layout file before the PE programs. A resource that is claimed in the layout file is therefore reserved in every PE program: a PE program that claims a color gets a color other than `west_color` and `east_color`.
+
+## Claims at runtime
+
+A claim can also stand in code that runs on the PE, in a function or a task. It is then made when the statement is executed, and the resource can be given back with the matching release builtin:
+
+```csl
+const c: color = @claim_color();
+// ...
+@release_color(c);
+```
+
+`csl-pp` cannot resolve such a claim at compile time, because the result depends on what the program has claimed and released before. It adds a small allocator to the PE program instead. The allocator has a bitmap for each kind of resource, in which a set bit marks a free resource. A claim finds the lowest set bit, clears it, and returns its number. A release sets the bit again.
+
+The bitmaps start with the resources that the compile-time claims, memcpy and the bound tasks have left free, so a claim at runtime never returns one of those. If a bitmap has no set bit left, the claim halts the PE. `@count_free(color)` returns the number of free colors, and likewise for the other kinds.
+
+A program without claims at runtime contains no allocator. The program of this step is one of them. The [next step](../4-parallel/) adds a claim at runtime: `@await_parallel` claims a task ID from the allocator for each of its worker tasks.
+
+## Claims and fixed numbers
+
+A claim takes into account the other claims, the resources of memcpy, and the tasks that were bound to a fixed ID before the claim was evaluated. It does not know the colors and queues that a program takes with `@get_color` or `@get_input_queue`. In this example, `b` is color 0 as well:
+
+```csl
+const a: color = @get_color(0);
+const b: color = @claim_color();
+```
+
+A program should therefore claim all its resources of a kind, or none of them.
+
+[Claims](../../language/resources/) is the reference of the claim builtins.

@@ -1,5 +1,5 @@
 ---
-title: Resource allocation
+title: Claims
 description: Claiming, releasing and counting colors, task IDs and queues.
 ---
 
@@ -21,11 +21,11 @@ Which ID a claim returns is not specified.
 
 ## Claims at compile time
 
-A claim in a comptime context is made at compile time, and its result is a constant: the initializer of a global, a `comptime` block, or a function called from one. Such a claim has no runtime cost and cannot be released.
+A claim in a comptime context is made at compile time, and its result is a constant. Comptime contexts are the initializer of a global, a `comptime` block, and a function that is called from one of the two. Such a claim has no runtime cost and cannot be released.
 
 <Example file="language/resources/src/pe.csl" region="comptime" />
 
-A claim in a layout file or a module that it imports reserves the resource in every PE program as well. A PE program that claims resources gets other ones. A library typically claims its colors in its layout part and passes them to its PE part as parameters; see [step 3 of the tutorial](../../tutorial/3-resources/).
+A claim in a layout file, or in a module that the layout file imports, reserves the resource in every PE program as well. A PE program that claims resources gets other ones. A library typically claims its colors in its layout part and passes them to its PE part as parameters; see [Writing a library](../../guides/libraries/).
 
 ## Claims at runtime
 
@@ -33,7 +33,7 @@ A claim in runtime code is made when it runs. It never returns a resource that i
 
 <Example file="language/resources/src/pe.csl" region="runtime" />
 
-A runtime claim calls a small allocator that `csl-pp` adds to the program. If no resource of the kind is free, the PE halts.
+A runtime claim calls a small allocator that `csl-pp` adds to the program. The allocator keeps a bitmap of the free resources of each kind; a claim takes the lowest free one. If no resource of the kind is free, the PE halts.
 
 ## Releasing resources
 
@@ -50,7 +50,7 @@ A runtime claim calls a small allocator that `csl-pp` adds to the program. If no
 
 Returns the number of free resources of the kind `T`, which must be one of the types `color`, `local_task_id`, `data_task_id`, `control_task_id`, `input_queue` or `output_queue`. At runtime, it is the number of resources that a claim could return at that moment. In a comptime context, it is the number that the compile-time claims evaluated so far have left.
 
-`@await_parallel` claims its worker tasks at runtime, so `@count_free(local_task_id)` tells whether a parallel call can get them; see [Parallel await](../calls/#worker-tasks).
+`@await_parallel` claims its worker tasks at runtime, so `@count_free(local_task_id)` tells whether a parallel call can get them; see [Worker tasks](../calls/#worker-tasks).
 
 ## Available resources
 
@@ -60,17 +60,22 @@ The pools from which the claims draw depend on the architecture. The memcpy libr
 | --- | --- | --- | --- |
 | Colors | 0–23 | 0–23 | 20–23 |
 | Local tasks | 0–28 | 8–28 | 21, 27, 28 (and 30, which is never claimed) |
-| Data tasks | 0–23 | input queues 0–7 | see colors / input queues |
+| Data tasks | 0–23, one per color | one per input queue 0–7 | those of its colors (WSE-2) or of its input queues (WSE-3) |
 | Control tasks | 31–62 | 31–62 | 33–37 |
 | Input queues | 0–7 | 0–7 | 0, 1 |
 | Output queues | 0–5 | 0–7 | 0, 1 |
 
-On WSE-2, colors, local tasks 0–23 and data tasks are the same task table entries: claiming a color also takes the local task and data task with the same number. On WSE-3, a data task belongs to an input queue, so claiming a data task also takes the input queue.
+On WSE-2, colors, local tasks 0–23 and data tasks are the same task table entries: claiming a color also takes the local task and the data task with the same number. On WSE-3, a data task belongs to an input queue, so claiming a data task also takes the input queue.
 
-A task bound with a fixed ID, for example `@bind_local_task(t, @get_local_task_id(9))`, is reserved when the bind is evaluated. Claims evaluated after the bind do not return its ID; a claim evaluated before it can.
+## Fixed numbers
+
+A program can use claims next to resources that it chooses by number, within these limits:
+
+- A task bound with a fixed ID, for example `@bind_local_task(t, @get_local_task_id(9))`, is reserved when the bind is evaluated. Claims evaluated after the bind do not return its ID. A claim evaluated before the bind can return it.
+- A color or queue that the program takes with `@get_color(n)`, `@get_input_queue(n)` or `@get_output_queue(n)` is not reserved. A claim can return the same number.
 
 <Aside type="caution">
-Claim all task IDs, or bind tasks with fixed IDs before any claim of the same kind.
+Claim all resources of a kind, or bind tasks with fixed IDs before any claim of the same kind. On WSE-2, a program that uses `@await_parallel` or claims task IDs at runtime has to claim its colors as well, because a color occupies the task table entry with the same number there.
 </Aside>
 
 ## Errors

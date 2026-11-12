@@ -1,5 +1,5 @@
 ---
-title: The compiler
+title: Architecture of csl-pp
 description: How csl-pp is built, from the parser through its two intermediate representations to the vanilla CSL it emits, and where a new language feature goes.
 sidebar:
   order: 1
@@ -11,7 +11,7 @@ import PassPipeline from '../../../components/PassPipeline.astro';
 
 <PassPipeline />
 
-## CSL
+## Types in CSL
 
 CSL is inspired by Zig. Types are first-class values that exist at compile time: a function can take a type as a parameter, return one, store one in a constant, or compute one from the type of another argument. A generic function is an ordinary function with comptime parameters, instantiated for every combination of comptime arguments it is called with. A branch on a comptime value decides which code exists at all, and an `@import_module` with a parameter struct is an instantiation of a whole file.
 

@@ -7,18 +7,20 @@ The csl++ compiler `csl-pp` is a drop-in replacement for `cslc` and takes the sa
 csl++ currently adds async functions and tasks, and automatic allocation of colors, task IDs and queues:
 
 ```
-async fn recv_squared(comptime in: fabin_dsd) f32 {
-  var x: f32 = 0.0;
-  @fmovs(&x, in, .{ .async = true, .activate = @current_task() });
+// Receives one value from in and returns it.
+async fn receive(comptime in: fabin_dsd) f32 {
+  var value: f32 = 0.0;
+  const value_dsd = @get_dsd(mem1d_dsd, .{ .base_address = &value, .extent = 1 });
+  @fmovs(value_dsd, in, .{ .async = true, .activate = @current_task() });
   suspend;  // continues here when the value has arrived
-  x *= x;
-  return x;
+  return value;
 }
 
-async task main() void {
+async task sum_task() void {
   // Receive from both neighbors at the same time.
-  const r = @await_parallel(recv_squared(west_dsd), recv_squared(east_dsd));
-  sum = r[0] + r[1];
+  const values = @await_parallel(receive(west_in_dsd), receive(east_in_dsd));
+  x[0] = values[0] + values[1];
+  sys_mod.unblock_cmd_stream();
 }
 ```
 
@@ -49,7 +51,7 @@ The csl++ libraries are installed with the package; `csl-pp` and `csl-lsp-server
 
 ## Editor support
 
-The VS Code extension [CSL Language Server](https://marketplace.visualstudio.com/items?itemName=esa-tu-darmstadt.csl-lsp) provides diagnostics, hover, completion and go-to-definition for CSL and csl++. It bundles the language server and does not need this package.
+The VS Code extension [Language Server for CSL](https://marketplace.visualstudio.com/items?itemName=esa-tu-darmstadt.csl-lsp) provides diagnostics, hover, completion and go-to-definition for CSL and csl++. It contains the language server and does not need this package. For a program that imports the csl++ libraries, set the extension's `csl.serverPath` to the `csl-lsp-server` of this package, which finds the libraries.
 
 ## Bug reports
 

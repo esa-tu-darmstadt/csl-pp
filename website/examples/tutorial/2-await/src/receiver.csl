@@ -1,0 +1,60 @@
+// Program of the middle PE: receives a value from each of its two neighbors
+// and stores their sum in x.
+param memcpy_params;
+param west_color: color;
+param east_color: color;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// The sum, read by the host.
+var x = @zeros([1]f32);
+var ptr_x: [*]f32 = &x;
+
+// region: queues
+// One input queue per neighbor.
+const west_queue: input_queue = @get_input_queue(2);
+const east_queue: input_queue = @get_input_queue(3);
+const west_in_dsd = @get_dsd(fabin_dsd, .{ .extent = 1, .input_queue = west_queue });
+const east_in_dsd = @get_dsd(fabin_dsd, .{ .extent = 1, .input_queue = east_queue });
+// endregion
+
+// region: receive
+// Receives one value from in and returns it.
+async fn receive(comptime in: fabin_dsd) f32 {
+  var value: f32 = 0.0;
+  const value_dsd = @get_dsd(mem1d_dsd, .{ .base_address = &value, .extent = 1 });
+  @fmovs(value_dsd, in, .{ .async = true, .activate = @current_task() });
+  suspend;  // continues here when the value has arrived
+  return value;
+}
+// endregion
+
+// region: task
+async task sum_task() void {
+  const west = @await(receive(west_in_dsd));
+  const east = @await(receive(east_in_dsd));
+  x[0] = west + east;
+  sys_mod.unblock_cmd_stream();
+}
+// endregion
+
+// region: start
+const sum_task_id: local_task_id = @get_local_task_id(8);
+
+// Called by the host.
+fn compute() void {
+  @coro_runtime_init();
+  @activate(sum_task_id);
+}
+
+comptime {
+  @bind_local_task(sum_task, sum_task_id);
+}
+// endregion
+
+comptime {
+  @initialize_queue(west_queue, .{ .color = west_color });
+  @initialize_queue(east_queue, .{ .color = east_color });
+  @export_symbol(ptr_x, "x");
+  @export_symbol(compute);
+}

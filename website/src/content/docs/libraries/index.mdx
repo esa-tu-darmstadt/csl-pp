@@ -9,9 +9,9 @@ csl++ comes with three libraries, in `csl-libs/` of the repository. They are por
 
 | Library | Operations | Used by |
 | --- | --- | --- |
-| [`allreduce`](allreduce/) | Sum or maximum of a vector over all PEs, with the result on every PE; 2-norm of a scalar over all PEs. | The tutorial, the stencil benchmarks. |
-| [`stencil_3d_7pts`](stencil_3d_7pts/) | Product of a vector with a 7-point stencil matrix on a 3D grid. | The tutorial, the stencil benchmarks. |
-| [`collectives_2d`](collectives_2d/) | Broadcast, scatter, gather and reduce along the rows or columns of the rectangle. | GEMV and GEMM. |
+| [`allreduce`](allreduce/) | Sum or maximum of a vector over all PEs, with the result on every PE; 2-norm of a scalar over all PEs. | The [conjugate gradient example](../guides/solver/), the stencil benchmarks. |
+| [`stencil_3d_7pts`](stencil_3d_7pts/) | Product of a vector with a 7-point stencil matrix on a 3D grid. | The [conjugate gradient example](../guides/solver/), the stencil benchmarks. |
+| [`collectives_2d`](collectives_2d/) | Broadcast, scatter, gather and reduce along the rows or columns of the rectangle. | The GEMV and GEMM benchmarks. |
 
 ## Importing a library
 
@@ -45,7 +45,7 @@ The operations are async functions, called with `@await` from an async function 
 @await(reduce.allreduce(n, &x, reduce.TYPE_BINARY_OP.ADD));
 ```
 
-A program that uses a library therefore has at least one async task, and calls `@coro_runtime_init()` before it is activated; see [Async functions and tasks](../language/async/). At most one operation of an instance runs at a time.
+A program that uses a library therefore has at least one async task, and calls `@coro_runtime_init()` before the task is activated; see [Async functions and tasks](../language/async/). At most one operation of an instance runs at a time. The [conjugate gradient example](../guides/solver/) walks through a program that uses two of the libraries.
 
 ## DSRs
 

@@ -1,0 +1,53 @@
+---
+title: 2. Async functions
+description: An async function is a function that can suspend. It is called with @await and returns a value like any function.
+sidebar:
+  order: 2
+---
+
+import Example from '../../../components/Example.astro';
+
+The task of [step 1](../1-suspend/) contains the same code twice, once for each neighbor. This step moves that code into a function. The program of this step is in `website/examples/tutorial/2-await`.
+
+## Declaring an async function
+
+A function that contains `suspend` is declared with `async fn`:
+
+<Example file="tutorial/2-await/src/receiver.csl" region="receive" />
+
+An async function has parameters and a return value like any function. `receive` takes the fabric input DSD to receive from and returns the value that it received. The DSD is a `comptime` parameter, so it is not passed at runtime. `value` is a local variable of the function. Like the local variables of an async task, it keeps its value and its address while the function is suspended.
+
+## Calling it with @await
+
+An async function is called with `@await`:
+
+<Example file="tutorial/2-await/src/receiver.csl" region="task" />
+
+`@await(receive(west_in_dsd))` calls `receive` and returns its result when `receive` has returned. In between, `receive` suspends: the run of the task ends inside `receive`. When the receive operation activates the task, the task continues inside `receive`, which then returns to `sum_task`.
+
+The second call starts when the first one has returned. The task still receives the two values one after the other, as in step 1.
+
+`@await` is an expression. The task can also be written without the two constants:
+
+```csl
+x[0] = @await(receive(west_in_dsd)) + @await(receive(east_in_dsd));
+```
+
+## Awaited functions run on the caller's task
+
+`receive` does not have a task of its own. A function that is called with `@await` runs on the task of its caller, like an ordinary function call:
+
+- `@current_task()` in `receive` is the ID of `sum_task`. The receive operation therefore activates `sum_task`, and `sum_task` continues inside `receive`.
+- The local variables of `receive` are on the stack of `sum_task`.
+
+`@await` therefore needs no task ID and no memory beyond the stack frame of the function.
+
+## Rules
+
+- An async function can only be called from an async function or an async task, and only as the argument of `@await` or `@await_parallel`. `receive(west_in_dsd)` without `@await` is an error.
+- An async function can call ordinary functions and can await other async functions. An `@await` can stand in a loop or in a branch, like any call.
+- `suspend` is only allowed in async functions and async tasks.
+
+[Async functions and tasks](../../language/async/) and [Calling async functions](../../language/calls/) are the reference.
+
+The program still chooses its colors, its queues and its task ID by number. The [next step](../3-claims/) changes that.

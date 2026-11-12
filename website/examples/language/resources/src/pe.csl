@@ -2,32 +2,31 @@ param memcpy_params;
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
-// result[0]: 1 if a runtime claim differs from the compile-time claim
-// result[1]: 1 if claiming a color took one free color
-// result[2]: 1 if a released color is free again
-// result[3]: 1 if the task bound at runtime ran
-var result: [4]u32;
-var result_ptr: [*]u32 = &result;
-
 // region: comptime
 // Claimed at compile time: these are constants in the generated CSL.
-const fixed_color: color = @claim_color();
+const first_color: color = @claim_color();
+const second_color: color = @claim_color();
 const done_task_id: local_task_id = @claim_local_task();
+
+comptime {
+  // Two claims never return the same resource.
+  @comptime_assert(@get_int(first_color) != @get_int(second_color));
+}
 // endregion
 
 // region: runtime
 fn check_claims() void {
   // Claimed at runtime: never one of the colors claimed at compile time.
   const c = @claim_color();
-  result[0] = if (@get_int(c) != @get_int(fixed_color)) 1 else 0;
+  @assert(@get_int(c) != @get_int(first_color));
+  @assert(@get_int(c) != @get_int(second_color));
 
+  // A claim takes one of the free colors, and a release gives it back.
   const free = @count_free(color);
   const d = @claim_color();
-  result[1] = if (@count_free(color) == free - 1) 1 else 0;
-
-  // A released color is free again.
+  @assert(@count_free(color) == free - 1);
   @release_color(d);
-  result[2] = if (@count_free(color) == free) 1 else 0;
+  @assert(@count_free(color) == free);
 
   @release_color(c);
 }
@@ -35,7 +34,6 @@ fn check_claims() void {
 
 // region: bind
 task worker() void {
-  result[3] = 1;
   @activate(done_task_id);
 }
 
@@ -47,6 +45,7 @@ fn start_worker() void {
 }
 // endregion
 
+// The host waits for this task, which the worker activates.
 task done() void {
   sys_mod.unblock_cmd_stream();
 }
@@ -59,6 +58,5 @@ fn compute() void {
 
 comptime {
   @bind_local_task(done, done_task_id);
-  @export_symbol(result_ptr, "result");
   @export_symbol(compute);
 }

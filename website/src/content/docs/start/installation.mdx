@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install csl-pp from PyPI and connect it to the Cerebras SDK.
+description: Install csl-pp from PyPI and set it up to find the Cerebras SDK.
 ---
 
 csl++ is distributed as the Python package `csl-pp`, which contains the compiler `csl-pp`, the language server `csl-lsp-server` and the [csl++ libraries](../../libraries/). The package is built for x86-64 Linux with glibc 2.28 or newer.
@@ -21,7 +21,7 @@ csl-pp --version
 
 It prints the csl++ release, its commit and the LLVM version. Release candidates are published as pre-releases; `pipx install --pip-args=--pre csl-pp` installs the latest one.
 
-## Connect to the Cerebras SDK
+## Set up the Cerebras SDK
 
 `csl-pp` runs `cslc` of the [Cerebras SDK](https://sdk.cerebras.ai), which is installed separately; csl++ is tested with SDK 2.10. Put the SDK directory, which contains `cslc`, on your `PATH`:
 
@@ -29,7 +29,9 @@ It prints the csl++ release, its commit and the LLVM version. Release candidates
 export PATH=~/cerebras-sdk:$PATH
 ```
 
-`csl-pp` then runs that `cslc`, and reads the SDK's system modules, such as `<memcpy/memcpy>`, from the SDK image (`*.sif`) next to it. To use another `cslc` or image, pass `--cslc=<path>` and `--system-module-sif=<path>`, or set them once in the `CSL_FLAGS` environment variable, which every `csl-pp` run reads:
+`csl-pp` then runs that `cslc`. It reads the system modules of the SDK, such as `<memcpy/memcpy>`, from the SDK image (`*.sif`) in the same directory.
+
+To use another `cslc` or another image, pass `--cslc=<path>` and `--system-module-sif=<path>`. Both can be set once in the environment variable `CSL_FLAGS`, which every `csl-pp` run reads:
 
 ```bash
 export CSL_FLAGS="--cslc=$HOME/cerebras-sdk/cslc --system-module-sif=$HOME/cerebras-sdk/sdk-cbcore-2.10.0.sif"
@@ -39,12 +41,10 @@ Host programs run with the `cs_python` of the SDK, as before.
 
 ## Editor support
 
-The [VS Code extension](../../tools/vscode/) provides diagnostics, hover, completion, signature help and go-to-definition for CSL and csl++. It is installed from the Visual Studio Marketplace and bundles the language server, so it needs neither the package nor a build of csl++.
+The [VS Code extension](../../tools/vscode/) provides diagnostics, hover, completion, signature help and go-to-definition for CSL and csl++. It is installed from the Visual Studio Marketplace and contains the language server, so it needs neither the package nor a build of csl++. Only a program that imports the csl++ libraries needs the server of the package; see [csl++ libraries](../../tools/vscode/#csl-libraries).
 
 ## Building from source
 
-The package is the recommended way to install csl++. [Contributing](../../project/contributing/#building-from-source) describes the build from source, for development or for platforms the package does not cover.
+The package is the recommended way to install csl++. [Contributing](../../project/contributing/#building-from-source) describes the build from source, for development or for platforms that the package does not cover.
 
-## Next
-
-Compile your first program in the [Quickstart](../quickstart/).
+The [Quickstart](../quickstart/) compiles a first program with the installed `csl-pp`.

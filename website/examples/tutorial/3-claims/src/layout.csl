@@ -1,0 +1,38 @@
+// Three PEs in a row. The two outer PEs each send a value to the middle
+// PE, which adds the two values.
+
+// region: colors
+const west_color: color = @claim_color();  // from PE 0 to PE 1
+const east_color: color = @claim_color();  // from PE 2 to PE 1
+// endregion
+
+const memcpy = @import_module("<memcpy/get_params>", .{ .width = 3, .height = 1 });
+
+layout {
+  @set_rectangle(3, 1);
+
+  // region: tiles
+  @set_tile_code(0, 0, "sender.csl", .{
+    .memcpy_params = memcpy.get_params(0),
+    .out_color = west_color,
+  });
+  @set_color_config(0, 0, west_color, .{ .routes = .{ .rx = .{RAMP}, .tx = .{EAST} } });
+
+  @set_tile_code(1, 0, "receiver.csl", .{
+    .memcpy_params = memcpy.get_params(1),
+    .west_color = west_color,
+    .east_color = east_color,
+  });
+  @set_color_config(1, 0, west_color, .{ .routes = .{ .rx = .{WEST}, .tx = .{RAMP} } });
+  @set_color_config(1, 0, east_color, .{ .routes = .{ .rx = .{EAST}, .tx = .{RAMP} } });
+
+  @set_tile_code(2, 0, "sender.csl", .{
+    .memcpy_params = memcpy.get_params(2),
+    .out_color = east_color,
+  });
+  @set_color_config(2, 0, east_color, .{ .routes = .{ .rx = .{RAMP}, .tx = .{WEST} } });
+  // endregion
+
+  @export_name("x", [*]f32, true);
+  @export_name("compute", fn() void);
+}

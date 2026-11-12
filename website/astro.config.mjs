@@ -63,7 +63,8 @@ export default defineConfig({
         {
           label: 'Start here',
           items: [
-            { label: 'Introduction', slug: 'start/introduction' },
+            // The start page is the introduction.
+            { label: 'Introduction', link: '/' },
             { label: 'Installation', slug: 'start/installation' },
             { label: 'Quickstart', slug: 'start/quickstart' },
           ],

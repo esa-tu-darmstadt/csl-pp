@@ -182,7 +182,6 @@ var fab_trans_south_wdsd = @get_dsd(fabout_dsd, .{
 // The exchange of one block
 ////////////////////////////////////////////////////////////////////////////////
 
-// region: send
 // Sends the current block of x to each neighbor that exists, east, west,
 // north, south. Each send is an asynchronous DSD operation that activates
 // the current task when it completes; the function suspends until then.
@@ -217,8 +216,6 @@ async fn send_to_neighbors() void {
     }
 }
 
-// endregion
-// region: recv
 // Receives the current block of each neighbor that exists, west, east,
 // south, north, into the buffer of that direction. Each receive activates
 // the current task when it completes; the function suspends until then.
@@ -253,7 +250,6 @@ async fn recv_from_neighbors() void {
     }
 }
 
-// endregion
 ////////////////////////////////////////////////////////////////////////////////
 // The stencil
 ////////////////////////////////////////////////////////////////////////////////
@@ -385,7 +381,6 @@ async fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
     @load_to_dsr(dest_dsr_send, mem_y_z_buf_dsd);
     @fmovs(dest_dsr_send, @as(f32,0));
 
-// region: blocks
     var start: i16 = 0;
     while (start < zDim) {
         var rem: i16 = zDim - start;
@@ -403,7 +398,6 @@ async fn spmv(n: i16, coeff: *[7]f32, x: [*]f32, y: [*]f32) void {
         mem_y_buf_dsd = @increment_dsd_offset(mem_y_buf_dsd, BLOCK_SIZE, f32);
     }
 
-// endregion
     laplacian_z();
 }
 

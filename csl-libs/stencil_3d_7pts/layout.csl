@@ -20,7 +20,6 @@
 param width: i16;   // width of the rectangle
 param height: i16;  // height of the rectangle
 
-// region: claims
 const C0: color = @claim_color();
 const C1: color = @claim_color();
 const C2: color = @claim_color();
@@ -29,7 +28,6 @@ const C4: color = @claim_color();
 const C5: color = @claim_color();
 const C6: color = @claim_color();
 const C7: color = @claim_color();
-// endregion
 
 // Parameters of the PE part.
 const Params = struct {

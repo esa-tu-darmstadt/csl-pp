@@ -1,15 +1,15 @@
 ---
 title: Porting callback code
-description: Turning a chain of callback tasks or a state machine into async code.
+description: Turning a chain of tasks or a state machine of a vanilla CSL program into async code.
 sidebar:
   order: 1
 ---
 
-This guide converts CSL code in which asynchronous operations continue in other tasks into an async task. [Step 1 of the tutorial](../../tutorial/1-solver/) shows the result for the conjugate gradient solver of the SDK benchmarks.
+In a vanilla CSL program, the code that follows an asynchronous operation is in another task, which the operation activates, or in another state of a state machine. This guide turns such code into an async task. [Step 1 of the tutorial](../../tutorial/1-suspend/) shows the conversion for a chain of three tasks, and the [conjugate gradient example](../solver/#comparison-with-the-sdk-benchmark) shows the result for a state machine.
 
-## Steps
+## Conversion in steps
 
-1. Find the sequence. Collect the tasks that continue each other through `.activate` or `.unblock`, or the arms of a state machine and the order in which its state variable selects them. Together they form one sequence of steps.
+1. Find the sequence. Collect the tasks that continue each other through `.activate` or `.unblock`, or the states of a state machine and the order in which its state variable selects them. Together they form one sequence of steps.
 
 2. Write the sequence as one async task. Declare an `async task` that contains the steps in order. After each asynchronous operation that used to activate the next task, activate the current task instead and suspend:
 
@@ -18,30 +18,60 @@ This guide converts CSL code in which asynchronous operations continue in other 
    suspend;
    ```
 
-   The code of the next task follows the `suspend`. Bind the async task with `@bind_local_task` and remove the tasks it replaces.
+   The code of the next task follows the `suspend`. Bind the async task with `@bind_local_task` and remove the tasks that it replaces.
 
-3. Replace the state variable with control flow. Transitions that set the state back to an earlier step become loops; transitions that depend on a condition become `if` statements.
+3. Replace the state variable with control flow. Transitions that set the state back to an earlier step become loops, and transitions that depend on a condition become `if` statements.
 
-4. Move values into local variables. Globals that only carry values from one step to the next can be local variables of the async task. Local variables keep their values and addresses across `suspend`.
+4. Move values into local variables. A global that only carries a value from one step to the next can be a local variable of the async task. Local variables keep their values and their addresses across `suspend`.
 
-5. Turn helper functions into async functions. A function that starts an operation and takes the task to continue with as a parameter becomes an `async fn` that activates `@current_task()` and suspends. Callers call it with `@await`.
+5. Turn helper functions into async functions. A function that starts an operation and takes the task to continue with as a parameter becomes an `async fn` that activates `@current_task()` and suspends. Its callers call it with `@await`.
 
-6. Initialize the runtime. Call `@coro_runtime_init()` once before the first async task is activated, usually in the function the host launches.
+6. Initialize the runtime. Call `@coro_runtime_init()` once before the first async task is activated, usually in the function that the host launches.
 
-7. Claim resources. Replace fixed colors, task IDs and queues with `@claim_color()`, `@claim_local_task()`, `@claim_input_queue()` and so on. See [Resource allocation](../../language/resources/).
+7. Claim the resources. Replace fixed colors, task IDs and queues with `@claim_color()`, `@claim_local_task()`, `@claim_input_queue()` and so on; see [Claims](../../language/resources/).
 
-## Libraries with callbacks
+## Libraries that activate a task
 
-A library function that takes a task to activate on completion can be used from async code without changing the library: pass `@current_task()` and suspend.
+A library function that takes a task to activate on completion can be called from async code without a change to the library. Pass `@current_task()` and suspend:
 
 ```csl
 callback_lib.start_transfer(&buffer, @current_task());
 suspend;
 ```
 
-## Things to check
+## Events that call a function
 
-- A suspended task resumes on any activation. If other code activates the same task ID, for example a library that was given the ID for another purpose, the task resumes too early. Give such code its own task ID.
-- Operations that end with `.unblock` instead of `.activate` do not resume a suspended task. Use `.activate = @current_task()`.
+Some events do not activate a task but call a function, for example a handler that the hardware calls when a control wavelet arrives. An async function can wait for such a call as well. The handler activates the task that waits. The `allreduce` library of csl++ waits in this way for the teardown wavelet that ends each of its phases:
+
+```csl
+var td_waiter_task: local_task_id;
+var td_received: bool = false;
+var td_awaiting: bool = false;
+
+fn teardown_allreduce() void {
+    td_received = true;
+    if (td_awaiting) {
+        @activate(td_waiter_task);
+    }
+}
+```
+
+An async function of the library resets the two flags, starts its DSD operations, and then waits for the handler:
+
+```csl
+if (!td_received) {
+    td_waiter_task = @current_task();
+    td_awaiting = true;
+    suspend;
+    td_awaiting = false;
+}
+```
+
+The function stores `@current_task()` for the handler and suspends. It checks `td_received` first, because the event can occur before the function gets to this point, and then there is nothing to wait for. The handler activates the task only if the function already waits. An earlier activation would resume the task at another `suspend`, where it waits for a DSD operation.
+
+## Pitfalls
+
+- A suspended task resumes on any activation. If other code activates the same task ID, for example a library that was given the ID for another purpose, the task resumes too early. Give such code a task ID of its own.
+- An operation that ends with `.unblock` instead of `.activate` does not resume a suspended task. Use `.activate = @current_task()`.
 - `sys_mod.unblock_cmd_stream()` returns control to the host. Call it after the last step of the async task, as the last task of the chain did before.
-- Two operations that run at the same time must not share a queue or a microthread, as in CSL. With `@await_parallel`, this applies to the operations of all its calls.
+- Two operations that run at the same time must not share a queue or a microthread, as in vanilla CSL. With `@await_parallel`, this applies to the operations of all its calls.

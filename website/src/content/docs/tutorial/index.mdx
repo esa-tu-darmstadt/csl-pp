@@ -1,56 +1,59 @@
 ---
-title: The program
-description: The conjugate gradient solver that the tutorial builds, and the libraries it uses.
+title: Tutorial
+description: The tutorial introduces suspend, async functions, claims and parallel calls with one small program.
 sidebar:
   order: 0
+  label: Overview
 ---
 
-The tutorial writes a solver for a linear system on the wafer. It is the conjugate gradient benchmark of the Cerebras SDK, written in csl++ with the [libraries](../libraries/) of csl++. The complete program is in `website/examples/tutorial/cg` of the repository.
+import Example from '../../../components/Example.astro';
 
-The tutorial assumes that you know CSL as taught in the [tutorials of the Cerebras SDK](https://sdk.cerebras.ai): layout files, DSDs, colors, routes and memcpy.
+The tutorial introduces the language extensions of csl++ with one small program, which changes from step to step. It assumes that you know CSL as taught in the [tutorials of the Cerebras SDK](https://sdk.cerebras.ai): tasks, DSDs, colors and routes, and memcpy.
 
-## The algorithm
+## Program
 
-Conjugate gradient solves *A x = b* for a symmetric positive definite matrix *A*. Starting from a guess *x*, it improves *x* along search directions *p* until the residual *r = b − A x* is small:
+Three PEs form a row. Each of the two outer PEs holds a value and sends it to the middle PE. The middle PE receives the two values and adds them.
 
 ```
-r = b − A x
-p = r
-ρ = r · r
-while ρ > tol² and k < max_ite:
-    w = A p
-    α = ρ / (p · w)
-    x = x + α p
-    r = r − α w
-    ρ' = r · r
-    p = r + (ρ' / ρ) p
-    ρ = ρ'
+    PE 0                    PE 1                    PE 2
+ sender.csl  ─────────►  receiver.csl  ◄─────────  sender.csl
+             west_color                east_color
 ```
 
-## The program on the wafer
+The outer PEs run `sender.csl`, which is vanilla CSL. When the host calls `compute`, the PE sends its value `x` to the middle PE:
 
-The unknowns are the points of a three-dimensional grid, and *A* is a 7-point stencil: the value of *A x* at a point is a weighted sum of the point and its six neighbors. The grid is distributed over a rectangle of PEs so that each PE holds a column of *n* points in z; the neighbors of a point in x and y are on the neighboring PEs.
+<Example file="tutorial/1-suspend/src/sender.csl" region="compute" />
 
-Each line of the algorithm then has a cost on the wafer:
+The middle PE runs `receiver.csl`. It has one input queue and one fabric input DSD for each neighbor:
 
-- *A p* is a stencil over the whole grid. Each PE exchanges its column with its four neighbors and applies the stencil locally. The library [`stencil_3d_7pts`](../libraries/stencil_3d_7pts/) does this.
-- *r · r* and *p · w* are dot products over the whole grid: a local dot product on every PE, followed by a sum over all PEs. The library [`allreduce`](../libraries/allreduce/) does the sum.
-- The vector updates are local DSD operations.
+<Example file="tutorial/1-suspend/src/receiver.csl" region="queues" />
 
-Each PE runs the loop above on its part of the vectors. Two library calls per iteration involve the fabric; everything else is local.
+The tutorial is about the rest of this file: the code that receives the two values and stores their sum. The layout file routes one color from each outer PE to the middle PE. The host program writes a value to each outer PE, calls `compute` on all PEs, and reads the sum from the middle PE.
 
-## The files
+## Running a step
 
-| File | Content |
-| --- | --- |
-| `src/layout.csl` | The rectangle of PEs; imports the layout parts of the libraries. |
-| `src/pe.csl` | The PE program with the solver loop. |
-| `run.py` | The host program: writes *b* and the stencil coefficients, runs the solver, checks *x*. |
-| `commands_wse2.sh`, `commands_wse3.sh` | Compile for WSE-2 or WSE-3 and run on the simulator. |
+Every step has a complete program in the csl++ repository, in `website/examples/tutorial`. With `csl-pp` and the Cerebras SDK on your `PATH`, as described in [Installation](../start/installation/), clone the repository and run the script of a step:
 
-The steps of the tutorial:
+```bash
+git clone https://github.com/esa-tu-darmstadt/csl-pp.git
+cd csl-pp/website/examples/tutorial/1-suspend
+./commands_wse3.sh
+```
 
-1. [The solver loop](1-solver/) writes the algorithm as an async task.
-2. [Inside a library](2-library/) shows how an async function suspends.
-3. [Resources](3-resources/) shows what the libraries claim and what the program does not have to.
-4. [Run it](4-run/) compiles and runs the program.
+The script compiles the program for WSE-3 and runs it on the simulator of the SDK. `commands_wse2.sh` does the same for WSE-2.
+
+<Example file="tutorial/1-suspend/commands_wse3.sh" />
+
+`csl-pp` takes the arguments of `cslc`. The host program prints the two values and the sum that it read from the middle PE:
+
+```
+1.5 + 2.25 = 3.75
+SUCCESS!
+```
+
+## Steps
+
+1. [Suspending a task](1-suspend/): a task waits for an operation with `suspend`.
+2. [Async functions](2-await/): the wait becomes a function that is called with `@await`.
+3. [Claiming resources](3-claims/): the program claims its colors, queues and task ID instead of choosing numbers.
+4. [Parallel calls](4-parallel/): `@await_parallel` receives both values at the same time.

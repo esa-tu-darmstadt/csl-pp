@@ -1,0 +1,83 @@
+---
+title: 1. Suspending a task
+description: An async task waits for an asynchronous operation with suspend and continues after it, with its local variables intact.
+sidebar:
+  order: 1
+---
+
+import Example from '../../../components/Example.astro';
+
+The middle PE has to wait twice: for the value of its west neighbor, and for the value of its east neighbor. This step writes that code, first in vanilla CSL and then with `suspend`. The program of this step is in `website/examples/tutorial/1-suspend`.
+
+## Waiting in vanilla CSL
+
+A receive from the fabric is an asynchronous DSD operation. The statement that starts it returns at once, and the operation runs in the background. With `.activate`, the operation activates a task when it has completed.
+
+A task of vanilla CSL runs to completion. It cannot stop in the middle and wait for an operation. The code that follows a receive therefore runs in a later activation: either in another task, which the receive activates, or in another state of the same task. The second form, a state machine, is the common one, because the number of tasks on a PE is limited and because a state machine can also express control flow such as loops:
+
+```csl
+var west = @zeros([1]f32);
+var east = @zeros([1]f32);
+const west_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> west[i] });
+const east_dsd = @get_dsd(mem1d_dsd, .{ .tensor_access = |i|{1} -> east[i] });
+
+// The step that the next run of sum_task executes.
+var state: u16 = 0;
+
+task sum_task() void {
+  switch (state) {
+    0 => {
+      @fmovs(west_dsd, west_in_dsd, .{ .async = true, .activate = sum_task_id });
+      state = 1;
+    },
+    1 => {
+      @fmovs(east_dsd, east_in_dsd, .{ .async = true, .activate = sum_task_id });
+      state = 2;
+    },
+    else => {
+      x[0] = west[0] + east[0];
+      sys_mod.unblock_cmd_stream();
+    },
+  }
+}
+```
+
+The host starts the sequence by activating `sum_task`. Each receive activates the task again, and the variable `state` tells the task where to continue. The sequence of two receives and an addition is spread over the three arms of the `switch`. The two values are global variables, because a task keeps nothing from one run to the next.
+
+## Waiting with suspend
+
+In csl++, a task can wait. The same sequence is one async task:
+
+<Example file="tutorial/1-suspend/src/receiver.csl" region="task" />
+
+`async task` declares a task that can suspend. The task receives the value of the west neighbor with the same `@fmovs` as the vanilla CSL version. The destination is the local variable `west`. An asynchronous operation takes DSDs as its operands, so the task declares the memory DSD `west_dsd`, which points to `west`. The operation activates `@current_task()`, the ID of the task that executes the code, which is `sum_task` itself.
+
+`suspend` then ends the current run of the task. When the receive has completed, the hardware activates the task again, and the task continues after the `suspend`. It needs no state variable for that. The second receive works in the same way. After its `suspend`, both values have arrived, and the task adds them.
+
+`west` and `east` are local variables, where the vanilla CSL version needs globals. A local variable of an async task keeps its value and its address while the task is suspended. The receive can therefore write `west` after the task has suspended, and `west` still holds the value after the second `suspend`.
+
+A suspended task does not block the PE. Other tasks run as usual while it waits.
+
+## Starting the task
+
+An async task is bound to a task ID and activated like any other task:
+
+<Example file="tutorial/1-suspend/src/receiver.csl" region="start" />
+
+`@coro_runtime_init()` sets up the runtime that suspends and resumes async tasks. A program must call it once before it activates its first async task. `csl-pp` reports an error for a program that binds an async task and never calls it.
+
+## Rules for suspend
+
+`suspend` only waits. Three rules follow from this:
+
+- `suspend` does not start an operation. The code before it has to start something that activates the task. If nothing does, the task never continues.
+- Any activation of the task's ID resumes the task, whatever its cause. A suspended task must therefore not be activated for another purpose.
+- If the operation completes before the task reaches `suspend`, the activation is not lost. The task runs again as soon as its current run has ended, and continues after the `suspend`.
+
+[Async functions and tasks](../../language/async/) is the reference of `async task`, `suspend` and `@current_task()`.
+
+## Compilation
+
+[Running a step](../#running-a-step) shows how to compile and run the program. `csl-pp` runs `cslc` twice for a program with async tasks. Every async task has a stack of its own, and `csl-pp` computes the size of the stack from the stack frames that the first `cslc` run reports. [Stack sizes](../../tools/csl-pp/#stack-sizes) describes this.
+
+In the [next step](../2-await/), the receive becomes a function.

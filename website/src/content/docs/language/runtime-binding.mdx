@@ -5,7 +5,7 @@ description: Calling @bind_local_task, @bind_data_task and @bind_control_task in
 
 import Example from '../../../components/Example.astro';
 
-In CSL, `@bind_local_task`, `@bind_data_task` and `@bind_control_task` can only be called at compile time. In csl++, they can also be called in runtime code. Together with runtime claims, a program can take a task ID while it runs, bind a task to it, and release it later:
+In vanilla CSL, `@bind_local_task`, `@bind_data_task` and `@bind_control_task` can only be called at compile time. In csl++, they can also be called in runtime code. Together with runtime claims, a program can take a task ID while it runs, bind a task to it, and release it later:
 
 <Example file="language/resources/src/pe.csl" region="bind" />
 

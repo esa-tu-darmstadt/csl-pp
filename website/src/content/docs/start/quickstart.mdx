@@ -1,13 +1,13 @@
 ---
 title: Quickstart
-description: Compile a CSL example of the Cerebras SDK with csl-pp, then a first program with an async task.
+description: Compile a vanilla CSL example of the Cerebras SDK with csl-pp, then compile and run a first csl++ program.
 ---
 
 import Example from '../../../components/Example.astro';
 
 This page assumes that `csl-pp` and the Cerebras SDK are on your `PATH`, as described in [Installation](../installation/).
 
-## Compile a CSL program
+## Compile a vanilla CSL program
 
 `csl-pp` takes the same arguments as `cslc`, and every CSL program is a csl++ program. Copy the first GEMV tutorial of the SDK and compile it with `csl-pp` in place of `cslc`:
 
@@ -21,22 +21,29 @@ cs_python run.py --name out
 
 `csl-pp` writes the CSL it generates to a temporary directory and runs `cslc` on it. `out/` contains the output of `cslc`, and `run.py` runs on the simulator as with `cslc`. `cs_python` is in the SDK directory.
 
-## A first async task
+## Compile a csl++ program
 
-The program in `website/examples/start/quickstart` of the repository runs one PE that doubles a vector with two asynchronous DSD operations: a copy, then an addition of the copy. In CSL, the second operation would start in a task that the first one activates. In csl++, both are in one `async task`:
+The example programs of this documentation are in the csl++ repository. Clone it and run the first program of the tutorial:
 
-<Example file="start/quickstart/src/pe.csl" region="task" />
+```bash
+git clone https://github.com/esa-tu-darmstadt/csl-pp.git
+cd csl-pp/website/examples/tutorial/1-suspend
+./commands_wse3.sh
+```
 
-`suspend` ends the task until the operation started before it activates the task again; execution then continues after the `suspend`. The operations run on explicit DSRs because, as in CSL, only operations with a fabric or DSR operand can be asynchronous. `@current_task()` is the ID of the task that runs the code, here `double_task`. `compute` is called by the host; it initializes the async runtime with `@coro_runtime_init()` and starts the task. The task ID is claimed with `@claim_local_task()` instead of being chosen by number.
+The script compiles the program with `csl-pp` and runs its host program on the simulator:
 
-Compile and run it from its directory:
+<Example file="tutorial/1-suspend/commands_wse3.sh" />
 
-<Example file="start/quickstart/commands_wse3.sh" />
+The program consists of three PEs in a row. The middle PE receives a value from each of its two neighbors and adds them, and the host program prints the result:
 
-`run.py` prints `SUCCESS!` when the PE returns `2 x`.
+```
+1.5 + 2.25 = 3.75
+SUCCESS!
+```
 
-## Next
+The middle PE does this in one task, which suspends while it waits for a value:
 
-- The [Tutorial](../../tutorial/) writes a conjugate gradient solver with the csl++ libraries.
-- [csl-pp](../../tools/csl-pp/) describes what `csl-pp` generates and its options.
-- [Async functions and tasks](../../language/async/) is the reference of the async extensions.
+<Example file="tutorial/1-suspend/src/receiver.csl" region="task" />
+
+The [Tutorial](../../tutorial/) explains this program and develops it further. [csl-pp](../../tools/csl-pp/) describes the options of `csl-pp` and the files it writes.

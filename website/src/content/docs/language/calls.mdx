@@ -57,7 +57,7 @@ A program can check at runtime how many local task entries are free with [`@coun
 - `@await_parallel` can be used in loops and nested in the calls of another `@await_parallel`. Workers are reused after their call returns.
 
 <Aside>
-Two calls that run at the same time must not use the same queue or microthread for asynchronous operations, as in CSL. Libraries that claim their queues, like those in [Libraries](../../libraries/), meet this rule when they are imported once per concurrent use.
+Two calls that run at the same time must not use the same queue or microthread for asynchronous operations, as in vanilla CSL. Libraries that claim their queues, like those in [Libraries](../../libraries/), meet this rule when they are imported once per concurrent use.
 </Aside>
 
 ## Errors

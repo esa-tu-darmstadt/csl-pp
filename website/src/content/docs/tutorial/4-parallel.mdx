@@ -1,0 +1,50 @@
+---
+title: 4. Parallel calls
+description: "@await_parallel runs several calls of async functions at the same time, each on a task of its own."
+sidebar:
+  order: 4
+---
+
+import Example from '../../../components/Example.astro';
+
+So far, the middle PE receives the two values one after the other: the second receive starts when the first one has completed. The two receives do not depend on each other, and each has its own input queue. This step runs them at the same time. The program of this step is in `website/examples/tutorial/4-parallel`.
+
+## Waiting for two operations
+
+A task cannot wait for two operations with `suspend` alone. Both receives would have to activate the same task, and an activation does not tell which of the two has completed.
+
+`@await_parallel` takes two or more calls of async functions. It runs them at the same time and returns when all of them have returned:
+
+<Example file="tutorial/4-parallel/src/receiver.csl" region="task" />
+
+The result is a tuple with one field per call, in the order of the calls: `values[0]` is the value of the west neighbor, and `values[1]` is the value of the east neighbor. The function `receive` is the one of [step 2](../2-await/#declaring-an-async-function).
+
+## Worker tasks
+
+Each call of an `@await_parallel` runs on a task of its own, so that the calls can suspend and resume independently:
+
+- The first call runs on the task of the caller, like a call with `@await`.
+- Every further call runs on a worker task. The runtime claims a local task ID for it when the call starts, and releases the ID when the call returns. This is a claim at runtime, as described in [step 3](../3-claims/#claims-at-runtime).
+
+In the second call of `receive`, `@current_task()` is the worker task. The receive from the east neighbor therefore activates the worker task and resumes the second call. The receive from the west neighbor activates `sum_task` and resumes the first call. When both calls have returned, `sum_task` continues after the `@await_parallel`.
+
+## Free task IDs
+
+The task ID of a worker task comes from the bitmap of the allocator, which holds the task IDs that the program has neither bound nor claimed at compile time. This is why [step 3](../3-claims/) came before this step: the allocator only knows the resources that were claimed or bound. On WSE-2, a color occupies the task ID with the same number, so a color that a program takes with `@get_color` can be given to a worker task.
+
+If no task ID is free when a worker task is needed, the PE halts. `csl-pp` warns at compile time when it cannot prove that enough task IDs are free. A program can also check at runtime with `@count_free(local_task_id)`; see [Worker tasks](../../language/calls/#worker-tasks).
+
+## Rules
+
+- Calls that run at the same time must not use the same queue or the same microthread for their operations. The two calls of `receive` use different input queues.
+- The arguments of each call after the first, together with the address of its result, have to fit into four 16-bit registers. `receive` has no runtime arguments, because its DSD is a `comptime` parameter.
+- `@await_parallel` can stand in a loop, and its calls can contain further `@await_parallel`.
+
+[Calling async functions](../../language/calls/#await_parallel) is the reference.
+
+## Further reading
+
+- The [Language](../../language/overview/) section is the reference of all extensions.
+- The [libraries](../../libraries/) of csl++ offer their operations as async functions, for example `@await(reduce.allreduce(n, &x, reduce.TYPE_BINARY_OP.ADD))`.
+- [Example: conjugate gradient solver](../../guides/solver/) walks through a larger program that uses two of the libraries.
+- [Porting callback code](../../guides/porting/) describes how to turn the tasks of a vanilla CSL program into async code.

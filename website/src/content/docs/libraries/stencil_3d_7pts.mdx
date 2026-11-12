@@ -63,11 +63,14 @@ Computes `y = A x` for the local column `x[0..n)`, with the coefficients `coeff[
 
 The library exchanges the column with the four neighbors in blocks. The two implementations differ in how the exchange of a block is driven; the DSD operations, routes and queues are the same.
 
-**`"async"`**, the default. The sends to the four neighbors and the receives from them are two async functions that run at the same time with `@await_parallel`, one block after the other. The library claims no task IDs; the worker task of `@await_parallel` is claimed while a product runs. Each transfer costs a suspend. The [tutorial](../../tutorial/2-library/) shows this implementation.
+| `impl` | Exchange of a block | Task IDs |
+| --- | --- | --- |
+| `"async"` (default) | The sends to the four neighbors and the receives from them are two async functions, which `spmv` runs at the same time with `@await_parallel`, one block after the other. Each transfer costs a suspend. | None at compile time. The worker task of `@await_parallel` is claimed while a product runs. |
+| `"hybrid"` | The sends and the receives are tasks that continue each other, as in the library of the SDK. `spmv` suspends once per product until they are done. | Three local task IDs, claimed at compile time. |
 
-**`"hybrid"`**. The sends and receives are tasks that continue each other, as in the library of the SDK, and `spmv` suspends once per product until they are done. The library claims three local task IDs at compile time. This is the faster implementation when the column is short, and it is the one the stencil benchmarks use.
+`"hybrid"` is the faster implementation when the column is short, and it is the one that the stencil benchmarks use.
 
 ## Requirements
 
 - At most one product of an instance runs at a time.
-- The program is at least 2 PEs wide and high only if the grid is; a single row or column works, the edge PEs skip the missing directions.
+- The rectangle can be a single row or a single column of PEs. A PE at an edge skips the directions in which it has no neighbor.

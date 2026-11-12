@@ -19,9 +19,7 @@
 param width: i16;   // width of the rectangle
 param height: i16;  // height of the rectangle
 
-// region: claim
 const C0: color = @claim_color();
-// endregion
 
 // Parameters of the PE part.
 const Params = struct {

@@ -1,0 +1,191 @@
+---
+title: "Example: conjugate gradient solver"
+description: A walk through a conjugate gradient solver that uses the stencil and allreduce libraries of csl++.
+sidebar:
+  order: 3
+---
+
+import Example from '../../../components/Example.astro';
+
+This page walks through a larger csl++ program: a solver for a linear system with the conjugate gradient method. It is the conjugate gradient benchmark of the Cerebras SDK, written with the [libraries](../../libraries/) `stencil_3d_7pts` and `allreduce` of csl++. The page assumes the [Tutorial](../../tutorial/).
+
+The program is in [`website/examples/guides/cg`](https://github.com/esa-tu-darmstadt/csl-pp/tree/main/website/examples/guides/cg) of the repository.
+
+## Conjugate gradient method
+
+The conjugate gradient method solves *A x = b* for a symmetric positive definite matrix *A*. Starting from a guess *x*, it improves *x* along search directions *p* until the residual *r = b − A x* is small:
+
+```
+r = b − A x
+p = r
+ρ = r · r
+while ρ > tol² and k < max_ite:
+    w = A p
+    α = ρ / (p · w)
+    x = x + α p
+    r = r − α w
+    ρ' = r · r
+    p = r + (ρ' / ρ) p
+    ρ = ρ'
+```
+
+The unknowns are the points of a three-dimensional grid, and *A* is a 7-point stencil: the value of *A x* at a point is a weighted sum of the values of *x* at the point and at its six neighbors. The grid is distributed over a rectangle of PEs. Each PE holds a column of *n* points in z, so the neighbors of a point in x and y are on the four neighboring PEs.
+
+Every PE runs the loop on its columns of the vectors. The operations of the loop differ in how much of the fabric they use:
+
+| Operation | Implementation | Provided by |
+| --- | --- | --- |
+| *A p* | Each PE exchanges its column of *p* with its four neighbors and applies the stencil. | `spmv` of the library [`stencil_3d_7pts`](../../libraries/stencil_3d_7pts/) |
+| *r · r* and *p · w* | Each PE computes the dot product of its columns. The results are summed over all PEs, and every PE receives the sum. | `allreduce` of the library [`allreduce`](../../libraries/allreduce/) |
+| Vector updates | Local DSD operations. | The program |
+
+## Layout
+
+The layout file imports the layout part of each library:
+
+<Example file="guides/cg/src/layout.csl" region="imports" />
+
+Neither import has a color parameter, because the libraries claim the colors they route. The layout part of a library has a function `get_params(px, py)`. It returns the parameters that the PE part of the library needs on the PE at `(px, py)`, among them the colors of the library and whether the PE is at an edge of the rectangle. The layout file passes them to the PE program of every PE:
+
+<Example file="guides/cg/src/layout.csl" region="tiles" />
+
+## Libraries in the PE program
+
+The PE program imports the PE part of each library with the parameters from the layout file:
+
+<Example file="guides/cg/src/pe.csl" region="imports" />
+
+The two imports provide the async functions that the solver awaits:
+
+- `stencil.spmv(n, coeff, x, y)` computes *y = A x* for the column of the PE. `coeff` points to the seven stencil coefficients.
+- `reduce.allreduce(n, x, op)` reduces the vector `x[0..n)` over all PEs with the operation `op` and leaves the result in `x` on every PE.
+
+The parameters `dsr_ids` and `dsr_id` select the DSRs into which the libraries load their DSDs, and `output_ut_id` selects the microthread of the stencil's sends on WSE-3. The pages of the libraries describe them.
+
+## Vectors
+
+Each PE holds its columns of the five vectors of the method, its stencil coefficients, and *ρ*:
+
+<Example file="guides/cg/src/pe.csl" region="vectors" />
+
+The host writes `b`, `x` and `stencil_coeff` before it launches the solver, and reads `x` and `rho` afterwards. The program also declares one memory DSD per vector, `mem_b_dsd` to `mem_r_dsd`, for the DSD operations of the loop.
+
+A dot product over the grid is the sum of the dot products of the columns. The program computes the part of one PE with a `@map` over two DSDs:
+
+<Example file="guides/cg/src/pe.csl" region="dot" />
+
+## Solver task
+
+The loop of the method is one async task. It follows the pseudocode above:
+
+```csl
+async task cg_task() void {
+  // r = b - A x, rho = r.r
+
+  var k: i16 = 0;
+  var rho_old: f32 = 0.0;
+  while (rho[0] > tol * tol and k < max_ite) {
+    k += 1;
+
+    // p = r + beta p, with p = r in the first iteration
+    // w = A p, eta = p.w
+    // x += alpha p, r -= alpha w, rho = r.r
+  }
+
+  sys_mod.unblock_cmd_stream();
+}
+```
+
+Each comment stands for a few statements, which the following sections show. `k` and `rho_old` are local variables of the task, and they keep their values while the task is suspended in a library call. The host starts the task by launching the function `solve`, which stores its arguments in globals and activates the task.
+
+### Initial residual
+
+<Example file="guides/cg/src/pe.csl" region="residual" />
+
+`stencil.spmv` computes `w = A x`. When the `@await` returns, the PE has exchanged `x` with its neighbors, and `w` is complete. `@fsubs` then computes `r = b − w`.
+
+The last two lines compute *ρ = r · r*. `dot` returns the part of this PE, and `reduce.allreduce` replaces it with the sum over all PEs. `rho` is declared as an array of one element because `allreduce` takes a pointer to the vector it reduces.
+
+### Search direction
+
+<Example file="guides/cg/src/pe.csl" region="direction" />
+
+The first iteration copies `r` to `p`. Every later iteration computes *p = r + β p* with one `@fmacs`, where *β* is the ratio of the current *ρ* and the previous one.
+
+### Step length
+
+<Example file="guides/cg/src/pe.csl" region="product" />
+
+This is the second call of `stencil.spmv`, now with `p`. The dot product *p · w* is reduced into the local variable `eta`; `@ptrcast` converts its address to the pointer type that `allreduce` takes. The library can write to a local variable of the task, because the local variables of an async task keep their addresses while the task is suspended.
+
+### Update of x and r
+
+<Example file="guides/cg/src/pe.csl" region="update" />
+
+The two `@fmacs` add *α p* to `x` and subtract *α w* from `r`. The task then saves *ρ* in `rho_old` for the next iteration and computes the new *ρ* in the same way as for the initial residual.
+
+### Complete task
+
+With these statements in place, the task is:
+
+<Example file="guides/cg/src/pe.csl" region="solver" />
+
+## Comparison with the SDK benchmark
+
+The libraries of the SDK benchmark report the completion of an operation by calling a callback. The loop of the benchmark is therefore a state machine: one task that is activated after every library call and continues with the state that was set before the call. This is a part of it, from `benchmarks/conjugate-gradient/src/kernel_cg.csl` of the SDK examples:
+
+```csl
+task f_state() void {
+    // ...
+    }else if (STATE_SPMV_AP == cur_state){
+        next_state = STATE_ETA;
+        // w = A*p
+        f_spmv_Ap();
+
+    }else if (STATE_ETA == cur_state){
+        next_state = STATE_UPDATE_X_R_RHO;
+        // eta = np.dot(p,w) = (p_{k}, A*p_{k})
+        f_eta();
+
+    // ...
+}
+
+fn f_trigger_state_machine() void {
+    cur_state = next_state; // go to next state
+    @activate(STATE);
+}
+```
+
+`f_trigger_state_machine` is the callback that the program passes to both libraries. The state machine has ten states, and the loop of the method is the transition from the last state of an iteration back to the convergence check. The iteration counter, `rho` and `rho_old` are globals, because the task starts from its beginning on every activation.
+
+The benchmark also chooses the colors, queues and task IDs of the libraries. Its layout file begins with a table of all of them and passes them to the libraries:
+
+```csl
+const reduce = @import_module( "../../benchmark-libs/allreduce/layout.csl", .{
+    .colors = [1]color{C8},
+    .entrypoints = [4]local_task_id{EN_REDUCE_1, EN_REDUCE_2, EN_REDUCE_3, EN_REDUCE_4},
+    .width = width,
+    .height = height
+    });
+```
+
+## Compiling and running
+
+The directory of the program contains one script per architecture. `commands_wse3.sh` compiles the program for WSE-3 and runs the host program on the simulator:
+
+<Example file="guides/cg/commands_wse3.sh" />
+
+`--import-path` names the `csl-libs` directory of the repository, so that the program is compiled with the libraries of the checkout. Without the option, an installed `csl-pp` uses the libraries of its installation.
+
+The host program writes the inputs, launches `solve`, and compares `x` with the result of the same algorithm on the host:
+
+```
+3 iterations, |r|^2 = 6.766016960144043 on the device, 6.766015529632568 on the host
+SUCCESS!
+```
+
+`run.py` limits the solver to three iterations with `max_ite`, so that the simulation takes a few minutes. The residual is still far from the tolerance after three iterations. To run on a Cerebras system instead of the simulator, pass `--cmaddr IP:port` to `run.py`, as for the host programs of the SDK examples.
+
+[Simulator tracing](../../tools/simtracer/#example) looks at the trace of this run: the flamegraph shows `spmv` and `allreduce` under `cg_task` across all their suspends.
+
+The benchmark version of the solver, with timing, is in `test/Integration/coro-benchmarks/conjugate-gradient` of the repository, next to ports of BiCGStab, the power method, and GEMM and GEMV with the [`collectives_2d`](../../libraries/collectives_2d/) library.

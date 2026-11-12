@@ -1,0 +1,36 @@
+// Program of the two outer PEs: sends the value x to the middle PE. This
+// program is vanilla CSL.
+param memcpy_params;
+param out_color: color;
+
+const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
+
+// The value, written by the host.
+var x = @zeros([1]f32);
+var ptr_x: [*]f32 = &x;
+
+// region: queue
+const out_queue: output_queue = @get_output_queue(2);
+// endregion
+const out_dsd = @get_dsd(fabout_dsd, if (@is_arch("wse3")) .{
+  .extent = 1,
+  .output_queue = out_queue,
+} else .{
+  .extent = 1,
+  .output_queue = out_queue,
+  .fabric_color = out_color,
+});
+
+// region: compute
+// Called by the host.
+fn compute() void {
+  @fmovs(out_dsd, x[0]);
+  sys_mod.unblock_cmd_stream();
+}
+// endregion
+
+comptime {
+  @initialize_queue(out_queue, if (@is_arch("wse3")) .{ .color = out_color } else .{});
+  @export_symbol(ptr_x, "x");
+  @export_symbol(compute);
+}

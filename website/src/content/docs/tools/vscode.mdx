@@ -1,20 +1,21 @@
 ---
 title: VS Code extension
-description: Setting up the csl++ language server in VS Code.
+description: Installing the VS Code extension with the csl++ language server, and setting it up for a program.
 ---
 
-`csl-lsp-server` is a language server for CSL and csl++. It uses the same front end as `csl-pp`, including comptime evaluation of the whole program. It reports the errors that `csl-pp` finds while parsing, evaluating and type-checking, and knows the types of values that depend on comptime code.
+The VS Code extension [Language Server for CSL](https://marketplace.visualstudio.com/items?itemName=esa-tu-darmstadt.csl-lsp) checks CSL and csl++ programs while they are edited. It runs `csl-lsp-server`, a language server that uses the frontend of `csl-pp`, including the comptime evaluation of the whole program. The server therefore reports the errors that `csl-pp` reports while parsing, evaluating and type-checking, and it knows the types of values that depend on comptime code.
 
-The VS Code extension [CSL Language Server](https://marketplace.visualstudio.com/items?itemName=esa-tu-darmstadt.csl-lsp) provides:
+The extension provides:
 
 - diagnostics while you type;
 - the type of a value on hover;
-- go to definition, including into imported modules;
+- go to definition, including into imported modules and the system modules of the SDK;
 - completion, including members after `.`;
 - signature help for calls;
-- the outline of a file.
+- the outline of a file;
+- syntax highlighting.
 
-## Install
+## Installation
 
 Install the extension from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=esa-tu-darmstadt.csl-lsp), or from the command line:
 
@@ -22,28 +23,80 @@ Install the extension from the [Visual Studio Marketplace](https://marketplace.v
 code --install-extension esa-tu-darmstadt.csl-lsp
 ```
 
-The extension bundles `csl-lsp-server`; nothing needs to be built. To run a server built from the repository instead, for example while working on the language server itself, set `csl.serverPath` to its path. The source of the extension is in `editors/vscode`.
+The extension contains `csl-lsp-server` for Linux on x86-64, so nothing has to be built. On another system, open the program on a Linux machine with the Remote - SSH or WSL extension of VS Code. The extension is then installed on that machine and runs there.
 
-## Settings
+## Changing settings
 
-Set `csl.systemModuleSif` to the SDK image, so that imports such as `<memcpy/memcpy>` can be resolved:
+The settings of the extension begin with `csl.`. VS Code offers two ways to change them:
+
+- In the Settings editor. Open it with `Ctrl+,` or File > Preferences > Settings, and search for `csl`.
+- As JSON. Open the Command Palette with `Ctrl+Shift+P`, run "Preferences: Open User Settings (JSON)" or "Preferences: Open Workspace Settings (JSON)", and add the settings to the file.
+
+VS Code stores settings on several levels. User settings apply to every folder that you open. Workspace settings apply to one folder, are stored in its `.vscode/settings.json`, and take precedence over the user settings. In a remote window, "Preferences: Open Remote Settings (JSON)" opens the user settings of the remote machine.
+
+The extension restarts the language server when one of its settings changes.
+
+## SDK image
+
+One setting is required. Set `csl.systemModuleSif` to the `*.sif` file in the directory of the Cerebras SDK:
 
 ```json
 {
-  "csl.systemModuleSif": "/home/user/cerebras-sdk/sdk-cbcore-2.10.0.sif",
+  "csl.systemModuleSif": "/home/user/cerebras-sdk/sdk-cbcore-2.10.0.sif"
+}
+```
+
+The server reads the system modules of the SDK, such as `<memcpy/memcpy>`, from this file. Without the setting, it reports an error for every import of a system module. The path is the same for all programs on a machine, so the setting belongs in the user settings, or in the remote settings in a remote window.
+
+## Settings of a program
+
+The architecture and the parameters of a program belong in the workspace settings of its folder. For a program that is compiled with `csl-pp layout.csl --arch=wse3 --params=width:4,N:8`, the file `.vscode/settings.json` in the folder contains:
+
+```json
+{
   "csl.arch": "wse3",
   "csl.params": { "width": 4, "N": 8 }
 }
 ```
 
+`csl.params` gives the values of the `param` declarations of the layout file, like `--params` on the command line.
+
+## Layout files and PE programs
+
+The server checks a program in the way `csl-pp` compiles it, starting from the layout file. A layout file is a file with a `layout` block. When one is open, the server evaluates it with `csl.params` and checks every PE program that a `@set_tile_code` call names, with the parameters of that call. If several calls name the same file, the server uses the parameters of the first one.
+
+A PE program whose layout file is not open is checked on its own. Its `param` declarations then have no values, and the server reports an error for each of them. Keep the layout file of a program open in a tab while you edit its PE programs.
+
+## csl++ libraries
+
+The extension does not contain the [csl++ libraries](../../libraries/). For a program that imports them, set `csl.serverPath` to the `csl-lsp-server` of the installed [package](../../start/installation/), which finds the libraries of its installation. `which csl-lsp-server` prints its path:
+
+```json
+{
+  "csl.serverPath": "/home/user/.local/bin/csl-lsp-server"
+}
+```
+
+`csl.serverPath` also selects a server that was built from the repository, for work on the language server itself.
+
+## Settings
+
 | Setting | Meaning | Default |
 | --- | --- | --- |
-| `csl.systemModuleSif` | The SDK image (`*.sif`) to read system modules from. | none |
-| `csl.systemImportPath` | A directory with the system modules, instead of the image; with an image, the directory in the image. | none |
-| `csl.arch` | `wse2` or `wse3`. | `wse2` |
-| `csl.params` | Values of `param` declarations, like `--params`. | `{}` |
-| `csl.fabricDims`, `csl.fabricOffsets`, `csl.rectangle` | Values for `@get_rectangle` and related builtins, as `width,height` and `x,y`. | `100,100`, `3,3`, `100,100` |
-| `csl.serverPath` | A `csl-lsp-server` other than the bundled one. | bundled |
-| `csl.serverArgs` | Further arguments of the server. | `[]` |
+| `csl.systemModuleSif` | The SDK image (`*.sif`) from which the server reads the system modules. | none |
+| `csl.systemImportPath` | A directory with the system modules, in place of the image. If both settings are given, it is the directory of the system modules within the image. | none |
+| `csl.arch` | The target architecture, `wse2` or `wse3`. | `wse2` |
+| `csl.params` | The values of the `param` declarations of the layout file, as an object of names and numbers. A number with a decimal point is a `comptime_float`, any other number a `comptime_int`. | `{}` |
+| `csl.fabricDims` | The fabric dimensions, as `width,height`. | `100,100` |
+| `csl.fabricOffsets` | The offset of the program rectangle in the fabric, as `x,y`. | `3,3` |
+| `csl.rectangle` | The size of the program rectangle that `@get_rectangle` returns, as `width,height`. | `100,100` |
+| `csl.serverPath` | A `csl-lsp-server` to run in place of the one in the extension. | the server in the extension |
+| `csl.serverArgs` | Further command-line arguments of the server, as an array of strings. | `[]` |
+| `csl.filterOverlappingErrors` | If several errors overlap, show only the innermost one. | `false` |
+| `csl.trace.server` | Log the messages between VS Code and the server: `off`, `messages` or `verbose`. | `off` |
 
-`CSL: Restart Language Server` in the command palette restarts the server after a change of settings.
+## Problems
+
+The server writes its log to the output channel "CSL Language Server" of the Output panel. "CSL: Restart Language Server" in the Command Palette restarts the server.
+
+The extension works next to the extension "Cerebras Software Language (CSL)" of Cerebras, which provides syntax highlighting only.

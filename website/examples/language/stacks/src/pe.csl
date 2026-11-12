@@ -2,9 +2,6 @@ param memcpy_params;
 
 const sys_mod = @import_module("<memcpy/memcpy>", memcpy_params);
 
-var result: [1]u32;
-var result_ptr: [*]u32 = &result;
-
 // region: recursion
 // At most 16 calls of fib are active at the same time.
 fn fib(n: u16) max_recursion_depth(16) u16 {
@@ -39,7 +36,10 @@ const main_task_id: local_task_id = @claim_local_task();
 
 async task main_task() void {
   const sums = @await_parallel(wait_and_add(1, 2), wait_and_add(3, 4));
-  result[0] = @as(u32, fib(10)) + @as(u32, gcd(48, 18)) + @as(u32, sums[0] + sums[1]);
+  @assert(sums[0] == 3);
+  @assert(sums[1] == 7);
+  @assert(fib(10) == 55);
+  @assert(gcd(48, 18) == 6);
   sys_mod.unblock_cmd_stream();
 }
 
@@ -51,6 +51,5 @@ fn compute() void {
 
 comptime {
   @bind_local_task(main_task, main_task_id);
-  @export_symbol(result_ptr, "result");
   @export_symbol(compute);
 }

@@ -116,10 +116,8 @@ var wvlts_per_pe: u16 = 0;                        // its length
 // Queues, DSRs and DSDs
 ////////////////////////////////////////////////////////////////////////////////
 
-// region: claims
 const iq_route: input_queue = @claim_input_queue();
 const oq_route: output_queue = @claim_output_queue();
-// endregion
 
 const dest_dsr = @get_dsr(dsr_dest, dsr_id);
 const src0_dsr = @get_dsr(dsr_src0, dsr_id);
@@ -225,7 +223,6 @@ async fn allreduce_nrm2(val: f32) f32 {
 // PE, which returns the color to its teardown state. The teardown handler
 // is an ordinary function that the hardware calls; it activates the task
 // that waits in the phase, if the phase is already waiting.
-// region: teardown-handler
 var td_waiter_task: local_task_id;
 var td_received: bool = false;
 var td_awaiting: bool = false;
@@ -236,7 +233,6 @@ fn teardown_allreduce() void {
         @activate(td_waiter_task);
     }
 }
-// endregion
 
 ////////////////////////////////////////////////////////////////////////////////
 // The three phases
@@ -245,7 +241,6 @@ fn teardown_allreduce() void {
 // Each phase configures the routes of the color, runs its DSD operations,
 // and then waits for the teardown wavelet unless it has already arrived.
 
-// region: row-reduce
 async fn row_reduce(n: u16) void {
     rowReduce_configure();
     setup_reduce_dsds(n);
@@ -262,7 +257,6 @@ async fn row_reduce(n: u16) void {
     }
 }
 
-// endregion
 async fn col_reduce(n: u16) void {
     colReduce_configure();
     setup_reduce_dsds(n);
