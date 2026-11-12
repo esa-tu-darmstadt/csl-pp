@@ -628,10 +628,44 @@ ParseResult FuncOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
+Attribute FuncOp::getArgAttr(unsigned index, StringRef name) {
+  ArrayAttr attrs = getArgAttrsAttr();
+  if (!attrs || index >= attrs.size())
+    return {};
+  return mlir::cast<DictionaryAttr>(attrs[index]).get(name);
+}
+
+void FuncOp::setArgAttr(unsigned index, StringRef name, Attribute value) {
+  MLIRContext *ctx = getContext();
+  SmallVector<Attribute> dicts;
+  if (ArrayAttr attrs = getArgAttrsAttr())
+    dicts.assign(attrs.begin(), attrs.end());
+  dicts.resize(getFunctionType().getNumInputs(), DictionaryAttr::get(ctx));
+  NamedAttrList list(mlir::cast<DictionaryAttr>(dicts[index]));
+  list.set(name, value);
+  dicts[index] = list.getDictionary(ctx);
+  setArgAttrsAttr(ArrayAttr::get(ctx, dicts));
+}
+
 LogicalResult FuncOp::verify() {
   // Verify that the function body has the correct number of arguments
   FunctionType fnType = getFunctionType();
   Region &body = getBody();
+
+  // The dialect verifies its argument attributes, as MLIR does for the
+  // arguments of a FunctionOpInterface op.
+  if (ArrayAttr argAttrs = getArgAttrsAttr()) {
+    auto *dialect = getContext()->getLoadedDialect<TypedCSLDialect>();
+    for (auto [index, attrs] : llvm::enumerate(argAttrs)) {
+      for (NamedAttribute attr : mlir::cast<DictionaryAttr>(attrs)) {
+        if (!attr.getName().getValue().starts_with("typed_csl."))
+          continue;
+        if (failed(dialect->verifyRegionArgAttribute(*this, /*regionIndex=*/0,
+                                                     index, attr)))
+          return failure();
+      }
+    }
+  }
 
   if (body.empty())
     return success();

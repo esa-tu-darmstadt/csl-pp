@@ -205,6 +205,12 @@ static LogicalResult emitTrampoline(FuncOp funcOp, IRRewriter &rewriter) {
     BlockArgument newArg =
         entryBlock->addArgument(origArg.getType(), origArg.getLoc());
     seedMapping.map(origArg, newArg);
+    // The frame is reached only through this parameter while the function
+    // runs: the caller does not touch the callee's frame until the callee
+    // returns. Marking it lets the emitter keep reads of other storage in
+    // place around the stores into the frame.
+    newFuncOp.setArgAttr(0, TypedCSLDialect::getNoAliasAttrName(),
+                         rewriter.getUnitAttr());
   }
 
   // Derive the frame element pointer in the new entry block.

@@ -206,20 +206,37 @@ static bool hasEffects(Operation *op) {
   return !effects.empty();
 }
 
+/// The storage an access belongs to: the named storage (a variable, a
+/// parameter or a global), or, with the flag set, the memory that a `noalias`
+/// pointer parameter points to, which is distinct from the parameter itself.
+/// The pointer is null if the storage is unknown.
+using StorageRoot = std::pair<const void *, bool>;
+
+static StorageRoot getPointeeRoot(Value pointer);
+
 /// The named storage that `lvalue` designates (a part of): a local variable,
-/// a parameter, or a global. Null if it is reached through a pointer, which
-/// may point to any storage whose address is taken.
-static const void *getStorageRoot(Value lvalue) {
+/// a parameter, or a global. Null if that is unknown, e.g. for an lvalue
+/// reached through a pointer parameter, which may point to any storage whose
+/// address is taken.
+///
+/// An lvalue reached through a pointer designates the storage the pointer was
+/// derived from (see getPointeeRoot). The stackless coroutine lowering relies
+/// on this: it passes arguments by storing them into the callee's frame, a
+/// global array, through pointers such as `@ptrcast(*i16, &frame[k])`.
+/// Without the root of such a store, every read of a variable around it would
+/// have to be kept in a temporary before it, which lengthens live ranges and
+/// makes cslc spill.
+static StorageRoot getStorageRoot(Value lvalue) {
   while (true) {
     if (auto arg = mlir::dyn_cast<BlockArgument>(lvalue))
-      return arg.getAsOpaquePointer();
+      return {arg.getAsOpaquePointer(), false};
     Operation *def = lvalue.getDefiningOp();
     if (mlir::isa<typed_csl::VariableOp>(def))
-      return def;
+      return {def, false};
     if (auto constant = mlir::dyn_cast<typed_csl::ConstantOp>(def)) {
       if (auto ref = mlir::dyn_cast<GlobalRefAttr>(constant.getValue()))
-        return ref.getSymbolName().getAsOpaquePointer();
-      return nullptr;
+        return {ref.getSymbolName().getAsOpaquePointer(), false};
+      return {};
     }
     if (auto access = mlir::dyn_cast<typed_csl::FieldAccessOp>(def))
       lvalue = access.getStructLvalue();
@@ -229,13 +246,62 @@ static const void *getStorageRoot(Value lvalue) {
       lvalue = access.getBase();
     else if (auto cast = mlir::dyn_cast<typed_csl::ConstCastOp>(def))
       lvalue = cast->getOperand(0);
+    else if (auto deref = mlir::dyn_cast<typed_csl::DereferenceOp>(def))
+      return getPointeeRoot(deref.getOperand());
+    else if (auto access = mlir::dyn_cast<typed_csl::PtrIndexAccessOp>(def))
+      return getPointeeRoot(access.getBase());
     else
-      return nullptr;
+      return {};
   }
 }
 
+/// Whether `lvalue` is a pointer parameter marked `noalias` (see
+/// typed_csl::TypedCSLDialect::getNoAliasAttrName).
+static bool isNoAliasParameter(Value lvalue) {
+  auto arg = mlir::dyn_cast<BlockArgument>(lvalue);
+  if (!arg || !arg.getOwner()->isEntryBlock())
+    return false;
+  auto func = mlir::dyn_cast<typed_csl::FuncOp>(arg.getOwner()->getParentOp());
+  return func &&
+         func.getArgAttr(arg.getArgNumber(),
+                         typed_csl::TypedCSLDialect::getNoAliasAttrName());
+}
+
+/// The storage that `pointer` points into:
+/// - the named storage it is derived from, if it is derived from the address
+///   of (a part of) that storage, `&x`, `&x[i]` or `&x.f`;
+/// - the pointee of a `noalias` pointer parameter, if it is loaded from one.
+/// Derived means: only by pointer casts, `@ptrcast`, and by taking the
+/// address of an element of a pointer derived that way, `&p[i]`. Unknown
+/// otherwise, e.g. for another pointer parameter, a loaded pointer, or a
+/// pointer cast from an integer.
+///
+/// A pointer derived from storage cannot reach other storage: an access
+/// outside the storage it was derived from is undefined in CSL. A `noalias`
+/// parameter's pointee is not reached by other means by definition. Two
+/// lvalues with different roots therefore never overlap, whether they are
+/// reached directly or through a pointer.
+static StorageRoot getPointeeRoot(Value pointer) {
+  while (Operation *def = pointer.getDefiningOp()) {
+    if (auto address = mlir::dyn_cast<typed_csl::AddressOfOp>(def))
+      return getStorageRoot(address.getOperand());
+    if (auto load = mlir::dyn_cast<typed_csl::LoadOp>(def)) {
+      if (isNoAliasParameter(load.getLvalue()))
+        return {load.getLvalue().getAsOpaquePointer(), true};
+      return {};
+    }
+    auto cast = mlir::dyn_cast<typed_csl::CastOp>(def);
+    if (!cast || !mlir::isa<csl::PointerType>(cast.getSource().getType()))
+      return {};
+    pointer = cast.getSource();
+  }
+  return {};
+}
+
 /// Whether two memory effects may access the same storage. Effects on
-/// different named storage cannot; anything else is assumed to.
+/// different storage cannot, also when one of them is reached through a
+/// pointer derived from that storage or through a `noalias` parameter (see
+/// getStorageRoot); anything else is assumed to.
 static bool mayAlias(const MemoryEffects::EffectInstance &a,
                      const MemoryEffects::EffectInstance &b) {
   Value aValue = a.getValue();
@@ -243,9 +309,21 @@ static bool mayAlias(const MemoryEffects::EffectInstance &a,
   if (!aValue || !bValue || !mlir::isa<LValueType>(aValue.getType()) ||
       !mlir::isa<LValueType>(bValue.getType()))
     return true;
-  const void *aRoot = getStorageRoot(aValue);
-  const void *bRoot = getStorageRoot(bValue);
-  return !aRoot || !bRoot || aRoot == bRoot;
+  StorageRoot aRoot = getStorageRoot(aValue);
+  StorageRoot bRoot = getStorageRoot(bValue);
+  return !aRoot.first || !bRoot.first || aRoot == bRoot;
+}
+
+/// Whether `effect` reads a parameter of a function itself (not memory
+/// reached through it). CSL does not allow a parameter to be written, so no
+/// op, not even a call, conflicts with such a read: the parameter can be read
+/// again at each use.
+static bool readsParameter(const MemoryEffects::EffectInstance &effect) {
+  if (!isa<MemoryEffects::Read>(effect.getEffect()))
+    return false;
+  auto arg = mlir::dyn_cast_if_present<BlockArgument>(effect.getValue());
+  return arg && arg.getOwner()->isEntryBlock() &&
+         mlir::isa<typed_csl::FuncOp>(arg.getOwner()->getParentOp());
 }
 
 /// Check if two operations have conflicting memory effects.
@@ -262,6 +340,10 @@ static bool conflicts(Operation *a, Operation *b) {
     for (const auto &be : bEffects) {
       // Different resources don't conflict
       if (ae.getResource() != be.getResource())
+        continue;
+
+      // Nothing writes a parameter
+      if (readsParameter(ae) || readsParameter(be))
         continue;
 
       // Read-Read doesn't conflict

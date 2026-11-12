@@ -594,6 +594,12 @@ def TypedCSL_FuncOp : TypedCSL_Op<"func", [
 
     /// Returns true if this function is external (has no body).
     bool isExternal() { return getBody().empty(); }
+
+    /// The attribute `name` of argument `index`, or null if it has none.
+    Attribute getArgAttr(unsigned index, StringRef name);
+
+    /// Sets the attribute `name` of argument `index` to `value`.
+    void setArgAttr(unsigned index, StringRef name, Attribute value);
   }];
 
   let hasCustomAssemblyFormat = 1;

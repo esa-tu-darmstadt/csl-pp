@@ -1,0 +1,51 @@
+// RUN: csl-s2s %s --count-tasks=false --coro-mode=trampoline | FileCheck %s
+//
+// The stackless lowering passes an argument by storing it into the callee's
+// frame, through a pointer into the caller's frame. Such a store can only
+// write the frame, not `n`, so the emitter reads `n` where the store uses it.
+// A temporary for the read, placed before the frame setup, would only
+// lengthen its live range.
+//
+// A task reaches its frame through the address of its frame array. An async
+// function reaches it through its frame parameter, which the lowering marks
+// `typed_csl.noalias`; and it reads that parameter again at each use, also
+// after a call, since nothing writes a parameter.
+
+var n: i16 = 4;
+var total: i16 = 0;
+
+async fn callee(m: i16) void {
+  @activate(@current_task());
+  suspend;
+  total += m;
+}
+
+// CHECK-LABEL: task worker() void {
+// CHECK-NOT:     __csl_tmp{{[0-9]+}} = n;
+// CHECK:         const [[FRAME:__csl_tmp[0-9]+]] = @ptrcast([*]u16, &(worker__coro_frame)[@as(u16, 4)]);
+// CHECK-NEXT:    (@ptrcast(*[2]u16, &(worker__coro_frame)[@as(u16, 4)]).*)[@as(u16, 0)] = @as(u16, 0);
+// CHECK-NEXT:    @ptrcast(*i16, &[[FRAME]][@as(u16, 1)]).* = n;
+async task worker() void {
+  @await(callee(n));
+}
+
+// CHECK-LABEL: fn middle(param0: [*]u16) void {
+// CHECK-NOT:     = param0;
+// CHECK:         callee(@ptrcast([*]u16, &param0[@as(u16, 4)]));
+// CHECK:         param0[@as(u16, 8)] = @as(u16, 0);
+// CHECK:         (@ptrcast(*[2]u16, &param0[@as(u16, 4)]).*)[@as(u16, 0)] = @as(u16, 0);
+// CHECK-NEXT:    @ptrcast(*i16, &param0[@as(u16, 5)]).* = n;
+// CHECK-LABEL: task worker2() void {
+async fn middle(m: i16) void {
+  @await(callee(n));
+  @await(callee(m));
+}
+
+async task worker2() void {
+  @await(middle(n));
+}
+
+comptime {
+  @bind_local_task(worker, @get_local_task_id(10));
+  @bind_local_task(worker2, @get_local_task_id(11));
+}

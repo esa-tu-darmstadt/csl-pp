@@ -37,6 +37,29 @@ void TypedCSLDialect::initialize() {
       >();
 }
 
+/// Verifies the argument attributes of the dialect: typed_csl.noalias must be
+/// a unit attribute on a pointer parameter of a typed_csl.func.
+LogicalResult TypedCSLDialect::verifyRegionArgAttribute(Operation *op,
+                                                        unsigned regionIndex,
+                                                        unsigned argIndex,
+                                                        NamedAttribute attr) {
+  if (attr.getName() != getNoAliasAttrName())
+    return success();
+  if (!mlir::isa<UnitAttr>(attr.getValue()))
+    return op->emitOpError()
+           << "'" << getNoAliasAttrName() << "' must be a unit attribute";
+  auto func = mlir::dyn_cast<FuncOp>(op);
+  if (!func)
+    return op->emitOpError() << "'" << getNoAliasAttrName()
+                             << "' is only valid on a parameter of a function";
+  Type type = func.getFunctionType().getInput(argIndex);
+  if (!mlir::isa<csl::PointerType>(type))
+    return op->emitOpError()
+           << "'" << getNoAliasAttrName() << "' on parameter " << argIndex
+           << " requires a pointer type, got " << csl::prettyPrintType(type);
+  return success();
+}
+
 void TypedCSLDialect::registerTypes() {
   addTypes<
 #define GET_TYPEDEF_LIST

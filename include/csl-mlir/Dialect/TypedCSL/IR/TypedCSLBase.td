@@ -46,12 +46,24 @@ def TypedCSL_Dialect : Dialect {
 
   let dependentDialects = ["mlir::csl::CSLDialect", "mlir::cf::ControlFlowDialect"];
 
+  // Verifies the argument attributes of the dialect (typed_csl.noalias).
+  let hasRegionArgAttrVerify = 1;
+
   let extraClassDeclaration = [{
     // Register all types
     void registerTypes();
 
     // Register all attributes
     void registerAttributes();
+
+    /// Unit attribute of a pointer parameter of a typed_csl.func whose
+    /// pointee the function accesses only through that parameter, like
+    /// `llvm.noalias` (C's `restrict`): no other variable, parameter or global
+    /// of the function overlaps it. The emitter then does not treat a store
+    /// through the parameter as a possible write to other storage. The
+    /// stackless coroutine lowering sets it on the frame parameter of the
+    /// functions it generates.
+    static StringRef getNoAliasAttrName() { return "typed_csl.noalias"; }
   }];
 }
 
