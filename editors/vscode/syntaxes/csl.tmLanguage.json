@@ -7,7 +7,11 @@
 			"name": "comment.line.double-slash.csl"
 		},
 		{
-			"match": "\\b(align|and|asm|break|comptime|color|const|continue|else|export|extern|fn|for|if|layout|linkname|linksection|or|param|return|struct|task|var|while|inline|volatile|noinline|async|await|suspend)\\b",
+			"match": "\\b(align|and|anytype|asm|break|comptime|const|continue|else|enum|export|extern|fn|for|if|layout|linkname|linksection|or|param|return|struct|switch|task|var|while|inline|volatile|noinline|async|await|suspend)\\b",
+			"name": "keyword.control.csl"
+		},
+		{
+			"match": "\\b(max_recursion_depth|stack_size)(?=\\s*\\()",
 			"name": "keyword.control.csl"
 		},
 		{
@@ -28,6 +32,10 @@
 		},
 		{
 			"match": "\\b(bool)\\b",
+			"name": "variable.storage.type.csl"
+		},
+		{
+			"match": "(?<!\\.)\\b(void|type|color|input_queue|output_queue|ut_id|direction|imported_module|mem1d_dsd|mem4d_dsd|fabin_dsd|fabout_dsd|fifo_handle|dsr_dest|dsr_src0|dsr_src1|dsr_fifo_dest|dsr_fifo_src1|xdsr|sr)\\b(?!\\s*:)",
 			"name": "variable.storage.type.csl"
 		},
 		{
