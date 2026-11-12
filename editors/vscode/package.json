@@ -1,7 +1,7 @@
 {
   "name": "csl-lsp",
   "displayName": "Language Server for CSL",
-  "description": "Language Server for Cerebras Software Language (CSL)",
+  "description": "Language server for the Cerebras Software Language (CSL) and csl++",
   "version": "0.0.0",
   "publisher": "esa-tu-darmstadt",
   "license": "Apache-2.0 WITH LLVM-exception",
@@ -13,6 +13,7 @@
   "bugs": {
     "url": "https://github.com/esa-tu-darmstadt/csl-pp/issues"
   },
+  "homepage": "https://esa-tu-darmstadt.github.io/csl-pp/tools/vscode/",
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -54,7 +55,7 @@
         "csl.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Override path to the csl-lsp-server executable. Leave empty to use the bundled binary."
+          "description": "Path of the csl-lsp-server to run. If empty, the extension runs the server that it contains."
         },
         "csl.serverArgs": {
           "type": "array",
@@ -62,7 +63,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Additional arguments passed to csl-lsp-server."
+          "description": "Further command-line arguments of csl-lsp-server."
         },
         "csl.arch": {
           "type": "string",
@@ -71,32 +72,32 @@
             "wse3"
           ],
           "default": "wse2",
-          "description": "Target architecture."
+          "description": "The target architecture."
         },
         "csl.systemImportPath": {
           "type": "string",
           "default": "",
-          "description": "Search path for system module imports (angle bracket syntax like \"<memcpy/get_params>\"). When a .sif container is specified via csl.systemModuleSif, this path is used as the internal search path within the SIF container. Leave empty when specifying a SIF container to use the default internal search path (/cb/toolchains/cslang/*/*/csl-libs/)."
+          "description": "A directory with the system modules of the SDK, which are imported with angle brackets, as in <memcpy/memcpy>. If csl.systemModuleSif is set, this is the directory of the system modules within the image; leave it empty to use the default directory of the SDK."
         },
         "csl.systemModuleSif": {
           "type": "string",
           "default": "",
-          "description": "Path to a .sif container for system module resolution. When set, system modules are resolved from the SIF container and opened as read-only virtual documents."
+          "description": "Path of the SDK image (*.sif) from which the server reads the system modules, such as <memcpy/memcpy>. Go to definition opens them as read-only documents."
         },
         "csl.rectangle": {
           "type": "string",
           "default": "100,100",
-          "description": "Rectangle size as width,height for @get_rectangle builtin."
+          "description": "The size of the program rectangle that @get_rectangle returns, as width,height."
         },
         "csl.fabricDims": {
           "type": "string",
           "default": "100,100",
-          "description": "Fabric dimensions as width,height for @get_rectangle builtin."
+          "description": "The fabric dimensions, as width,height."
         },
         "csl.fabricOffsets": {
           "type": "string",
           "default": "3,3",
-          "description": "Fabric offset as x,y for @get_rectangle builtin."
+          "description": "The offset of the program rectangle in the fabric, as x,y."
         },
         "csl.params": {
           "type": "object",
@@ -104,12 +105,12 @@
             "type": "number"
           },
           "default": {},
-          "description": "Parameter bindings passed to the LSP server. Keys are parameter names, values are numbers. Numbers containing '.' are comptime_float, otherwise comptime_int. Example: {\"DIM\": 2, \"Nz\": 4}."
+          "description": "The values of the param declarations of the layout file, like --params of csl-pp. A number with a decimal point is a comptime_float, any other number a comptime_int. Example: {\"width\": 4, \"N\": 8}."
         },
         "csl.filterOverlappingErrors": {
           "type": "boolean",
           "default": false,
-          "description": "When multiple error diagnostics overlap, show only the innermost (most specific) error."
+          "description": "If several errors overlap, show only the innermost one."
         },
         "csl.trace.server": {
           "type": "string",
@@ -119,7 +120,7 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Trace communication between VS Code and the CSL language server."
+          "description": "Log the messages between VS Code and the language server."
         }
       }
     }
